@@ -79,6 +79,11 @@ const envSchema = z.object({
     .optional()
     .transform((val) => val !== 'false'),
   VISION_PROVIDER: z.string().optional().default('google'),
+
+  // Google Workspace OAuth Configuration
+  GOOGLE_CLIENT_ID: z.string().optional().default(''),
+  GOOGLE_CLIENT_SECRET: z.string().optional().default(''),
+  GOOGLE_REDIRECT_URI: z.string().optional().default('http://localhost:5000/api/v1/workspace/auth/callback'),
 });
 
 // Parse and validate process.env

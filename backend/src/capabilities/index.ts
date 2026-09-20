@@ -12,6 +12,12 @@ import {
   ReadProfileCapability,
   ReadSettingsCapability,
 } from './internal/internal.capabilities.js';
+import {
+  GmailReadCapability,
+  CalendarListCapability,
+  DriveSearchCapability,
+  TasksListCapability,
+} from './workspace/workspace.capabilities.js';
 
 // Automatically register internal core capabilities
 capabilityRegistry.register(new ReadMemoryCapability());
@@ -21,8 +27,15 @@ capabilityRegistry.register(new ReadEmotionCapability());
 capabilityRegistry.register(new ReadProfileCapability());
 capabilityRegistry.register(new ReadSettingsCapability());
 
+// Automatically register Google Workspace capabilities
+capabilityRegistry.register(new GmailReadCapability());
+capabilityRegistry.register(new CalendarListCapability());
+capabilityRegistry.register(new DriveSearchCapability());
+capabilityRegistry.register(new TasksListCapability());
+
 export * from './types/capability.types.js';
 export * from './registry/capability.registry.js';
 export * from './security/security.router.js';
 export * from './internal/internal.capabilities.js';
+export * from './workspace/index.js';
 export * from './tools/tool.mapper.js';
