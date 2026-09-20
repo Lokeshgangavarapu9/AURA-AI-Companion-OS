@@ -8,6 +8,7 @@ export class GoogleTextToSpeechProvider implements ITextToSpeechProvider {
   public readonly providerId = 'google-tts';
   public readonly name = 'Google Cloud Text-to-Speech Engine';
   private config?: VoiceConfig;
+  private client?: TextToSpeechClient;
   public async initialize(config: VoiceConfig): Promise<void> {
     this.config = config;
     try {

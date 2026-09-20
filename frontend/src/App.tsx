@@ -435,19 +435,20 @@ export default function App() {
     }
   };
 
-  // Toggle Camera Vision Window (Clean Production Experience vs Developer Mode)
+  // Toggle Camera Vision Window
   const handleToggleCamera = async () => {
     const nextOpen = !cameraState.isOpen;
 
     if (nextOpen) {
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-        stream.getTracks().forEach((t) => t.stop());
+        if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+          const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+          stream.getTracks().forEach((t) => t.stop());
+        }
         setStatus('vision');
         soundFx.playStatusChange('vision');
       } catch (err) {
-        console.error('❌ App: Camera permission denied or device not found', err);
-        return;
+        console.warn('App: Camera permission or hardware fallback activated', err);
       }
     } else {
       setStatus('idle');
@@ -456,8 +457,92 @@ export default function App() {
 
     setCameraState((prev) => ({
       ...prev,
-      isOpen: settings.developerMode ? nextOpen : false,
+      isOpen: nextOpen,
     }));
+  };
+
+  // Multimodal Vision Query Execution
+  const handleCaptureFrame = async (question: string, imageBase64: string) => {
+    if (!user) {
+      openAuthModal('login');
+      return;
+    }
+
+    const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: `msg-vision-user-${Date.now()}`,
+        sender: 'user',
+        text: `📷 [Visual Query]: ${question}`,
+        timestamp: timeStr,
+      },
+    ]);
+
+    setStatus('thinking');
+    setEmotion('curious');
+    soundFx.playStatusChange('thinking');
+
+    try {
+      const { visionService } = await import('./api/services/visionService.js');
+      const res = await visionService.analyzeFrame({
+        prompt: question,
+        imageBase64,
+        sessionId: activeSession.sessionId,
+      });
+
+      if (res.success && (res.data as any)?.data) {
+        const visionData = (res.data as any).data;
+        const aiTimeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+        setActiveSession((prev) => ({
+          ...prev,
+          sessionId: visionData.sessionId || prev.sessionId,
+          messageCount: prev.messageCount + 2,
+        }));
+
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: `msg-vision-ai-${Date.now()}`,
+            sender: 'ai',
+            text: visionData.text,
+            timestamp: aiTimeStr,
+            emotion: (visionData.emotion as AIEmotion) || 'happy',
+          },
+        ]);
+
+        setStatus('speaking');
+        setEmotion((visionData.emotion as AIEmotion) || 'happy');
+        setIsSpeaking(true);
+        soundFx.playStatusChange('speaking');
+
+        setTimeout(() => {
+          setIsSpeaking(false);
+          setStatus('idle');
+          setEmotion('neutral');
+          soundFx.playStatusChange('idle');
+        }, 3500);
+      } else {
+        const errorMsg = 'error' in res ? (res as any).error : 'Vision processing failed';
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: `msg-vision-err-${Date.now()}`,
+            sender: 'ai',
+            text: `I had trouble perceiving that image clearly: ${errorMsg}`,
+            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            emotion: 'soothing',
+          },
+        ]);
+        setStatus('idle');
+        setEmotion('soothing');
+      }
+    } catch (err: any) {
+      console.error('Vision analysis error:', err);
+      setStatus('idle');
+      setEmotion('soothing');
+    }
   };
 
   // User Sent Text Message
@@ -587,7 +672,7 @@ export default function App() {
           cameraState={cameraState}
           onClose={() => setCameraState((c) => ({ ...c, isOpen: false }))}
           onTogglePause={() => setCameraState((c) => ({ ...c, isPaused: !c.isPaused }))}
-          onCaptureFrame={(label) => handleSendMessage(label)}
+          onCaptureFrame={handleCaptureFrame}
         />
       )}
 

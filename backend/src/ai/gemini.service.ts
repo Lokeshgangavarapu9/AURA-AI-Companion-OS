@@ -113,6 +113,66 @@ export class GeminiService {
       };
     }
   }
+
+  /**
+   * Multimodal Vision Intelligence: Visual Q&A, OCR, and scene understanding
+   */
+  public async analyzeVision(input: {
+    prompt: string;
+    imageBase64: string;
+    mimeType?: string;
+  }): Promise<{ text: string; emotion: typeof APP_CONSTANTS.SUPPORTED_EMOTIONS[number] }> {
+    if (!env.GEMINI_API_KEY) {
+      logger.info('ℹ️ GEMINI_API_KEY empty - returning offline fallback vision response');
+      return {
+        text: `I can see the camera frame. The image has been received and processed. Configure GEMINI_API_KEY in backend environment variables to enable live Gemini 2.5 Flash multimodal perception.`,
+        emotion: 'curious',
+      };
+    }
+
+    try {
+      const cleanBase64 = input.imageBase64.replace(/^data:image\/[a-z]+;base64,/, '').trim();
+      const mimeType = input.mimeType || (input.imageBase64.startsWith('data:image/png') ? 'image/png' : 'image/jpeg');
+
+      const ai = geminiClient.getClient();
+      const response = await ai.models.generateContent({
+        model: this.defaultModel,
+        contents: [
+          {
+            role: 'user',
+            parts: [
+              {
+                text: `You are AURA, an empathetic, observant, and highly intelligent AI Companion with vision perception.
+The user shared a live camera image with the following question or request:
+"${input.prompt || 'What do you see?'}"
+
+Analyze the visual details carefully (objects, text/OCR, ambient environment, expression, context).
+Respond directly, warmly, and insightfully as AURA.`,
+              },
+              {
+                inlineData: {
+                  mimeType,
+                  data: cleanBase64,
+                },
+              },
+            ],
+          },
+        ],
+      });
+
+      const responseText = response.text || "I see what you're showing me! Let's explore it together.";
+      return {
+        text: responseText,
+        emotion: 'curious',
+      };
+    } catch (err) {
+      logger.error({ err }, '❌ Vision analysis failed');
+      return {
+        text: "I observed the camera image, but encountered a brief processing delay. Could you please show me again?",
+        emotion: 'neutral',
+      };
+    }
+  }
 }
 
 export const geminiService = new GeminiService();

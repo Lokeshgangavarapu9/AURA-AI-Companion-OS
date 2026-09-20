@@ -6,6 +6,7 @@ import memoryRoutes from './memory.routes.js';
 import settingsRoutes from './settings.routes.js';
 import profileRoutes from './profile.routes.js';
 import authRoutes from './auth.routes.js';
+import visionRoutes from './vision.routes.js';
 
 const apiRouter = Router();
 
@@ -17,5 +18,6 @@ apiRouter.use('/sessions', sessionRouter);
 apiRouter.use('/', memoryRoutes);
 apiRouter.use('/', settingsRoutes);
 apiRouter.use('/', profileRoutes);
+apiRouter.use('/', visionRoutes);
 
 export default apiRouter;
