@@ -1,13 +1,12 @@
-# Nixpacks configuration for AURA AI Companion OS Backend (Scoped)
-
+# Nixpacks configuration for AURA AI Companion OS Backend on Railway
 [phases.setup]
 nixPkgs = ["nodejs_20", "openssl"]
 
 [phases.install]
-cmds = ["npm install"]
+cmds = ["if [ -d \"backend\" ]; then cd backend; fi && npm install --include=dev"]
 
 [phases.build]
-cmds = ["npx prisma generate", "npm run build"]
+cmds = ["if [ -d \"backend\" ]; then cd backend; fi && npx prisma generate && npm run build"]
 
 [start]
-cmd = "npx prisma migrate deploy && npm start"
+cmd = "if [ -d \"backend\" ]; then cd backend; fi && npx prisma migrate deploy && npm start"

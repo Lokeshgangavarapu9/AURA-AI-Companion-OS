@@ -9,8 +9,17 @@ export class GoogleTextToSpeechProvider implements ITextToSpeechProvider {
   public readonly name = 'Google Cloud Text-to-Speech Engine';
   private config?: VoiceConfig;
   private client?: TextToSpeechClient;
-  public async initialize(config: VoiceConfig): Promise<void> {
-    this.config = config;
+  public async initialize(config?: Partial<VoiceConfig>): Promise<void> {
+    this.config = {
+      sttProvider: 'google-stt',
+      ttsProvider: 'google-tts',
+      language: 'en-US',
+      sampleRate: 24000,
+      streaming: true,
+      voiceTimeoutMs: 10000,
+      ...(this.config || {}),
+      ...(config || {}),
+    } as VoiceConfig;
     try {
       if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
         this.client ??= new TextToSpeechClient();
@@ -18,7 +27,7 @@ export class GoogleTextToSpeechProvider implements ITextToSpeechProvider {
     } catch {
       logger.warn('Google Text-to-Speech credentials unavailable, using fallback synthesis');
     }
-    logger.info({ providerId: this.providerId, voiceName: config.voiceName }, 'Google Text-to-Speech adapter initialized');
+    logger.info({ providerId: this.providerId, voiceName: this.config.voiceName }, 'Google Text-to-Speech adapter initialized');
   }
 
   public async synthesize(text: string, overrideConfig?: Partial<VoiceConfig>): Promise<TTSResult> {

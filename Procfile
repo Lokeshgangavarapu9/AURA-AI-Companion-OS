@@ -1,1 +1,1 @@
-web: cd backend && npm start
+web: if [ -d "backend" ]; then cd backend; fi && npm start

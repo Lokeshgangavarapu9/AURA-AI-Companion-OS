@@ -1,8 +1,10 @@
 import dotenv from 'dotenv';
 import { z } from 'zod';
 
-// Load environment variables from backend/.env
-dotenv.config();
+// Load environment variables from backend/.env in non-production environments
+if (process.env.NODE_ENV !== 'production') {
+  dotenv.config();
+}
 
 /**
  * Zod Schema for strict Environment Variable Validation
