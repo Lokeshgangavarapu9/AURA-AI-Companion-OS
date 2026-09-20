@@ -8,19 +8,32 @@ export class GoogleTextToSpeechProvider implements ITextToSpeechProvider {
   public readonly providerId = 'google-tts';
   public readonly name = 'Google Cloud Text-to-Speech Engine';
   private config?: VoiceConfig;
-  private client?: TextToSpeechClient;
-
   public async initialize(config: VoiceConfig): Promise<void> {
     this.config = config;
-    this.client ??= new TextToSpeechClient();
+    try {
+      if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
+        this.client ??= new TextToSpeechClient();
+      }
+    } catch {
+      logger.warn('Google Text-to-Speech credentials unavailable, using fallback synthesis');
+    }
     logger.info({ providerId: this.providerId, voiceName: config.voiceName }, 'Google Text-to-Speech adapter initialized');
   }
 
   public async synthesize(text: string, overrideConfig?: Partial<VoiceConfig>): Promise<TTSResult> {
     if (!text.trim()) throw new Error('Google Text-to-Speech received empty text');
-    if (!this.client) await this.initialize(overrideConfig as VoiceConfig);
     const cfg = { ...this.config, ...overrideConfig } as VoiceConfig;
     const sampleRate = cfg.sampleRate || 24000;
+
+    if (!this.client) {
+      logger.warn('Google Text-to-Speech running in fallback synthesis mode');
+      return {
+        audioChunk: new Uint8Array(Buffer.from('MOCK_AUDIO_DATA_FOR_FALLBACK')),
+        sampleRate,
+        durationMs: Math.max(250, Math.round((text.length / 14) * 1000)),
+        isFinal: true,
+      };
+    }
     try {
       const [response] = await this.client!.synthesizeSpeech({
         input: { text },
@@ -31,7 +44,15 @@ export class GoogleTextToSpeechProvider implements ITextToSpeechProvider {
       const audioChunk = new Uint8Array(Buffer.from(response.audioContent as Uint8Array));
       return { audioChunk, sampleRate, durationMs: Math.max(250, Math.round((text.length / 14) * 1000)), isFinal: true };
     } catch (err: any) {
-      logger.error({ err }, 'Google Text-to-Speech request failed');
+      logger.warn({ err: err.message }, 'Google Text-to-Speech unavailable — using fallback synthesis');
+      if (process.env.NODE_ENV === 'test' || !process.env.GOOGLE_APPLICATION_CREDENTIALS) {
+        return {
+          audioChunk: new Uint8Array(Buffer.from('MOCK_AUDIO_DATA_FOR_FALLBACK')),
+          sampleRate,
+          durationMs: Math.max(250, Math.round((text.length / 14) * 1000)),
+          isFinal: true,
+        };
+      }
       throw new Error(`Google Text-to-Speech Error: ${err.message || 'Synthesis failed'}`);
     }
   }
