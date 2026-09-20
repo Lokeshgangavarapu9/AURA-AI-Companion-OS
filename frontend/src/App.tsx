@@ -26,6 +26,7 @@ import {
   sessionService,
   settingsService,
   authService,
+  API_CONFIG,
   UserClaims
 } from './api/index.js';
 
@@ -365,9 +366,10 @@ export default function App() {
         if (!liveVoiceManagerRef.current) {
           const { LiveVoiceSyncManager } = await import('./services/live-voice-sync.manager.js');
           const token = authService.getToken();
+          const baseWs = API_CONFIG.WS_VOICE_URL;
           const wsUrl = token
-            ? `ws://${window.location.hostname}:5000/ws/voice?token=${encodeURIComponent(token)}`
-            : `ws://${window.location.hostname}:5000/ws/voice`;
+            ? `${baseWs}${baseWs.includes('?') ? '&' : '?'}token=${encodeURIComponent(token)}`
+            : baseWs;
 
           liveVoiceManagerRef.current = new LiveVoiceSyncManager({
             wsUrl,
