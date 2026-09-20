@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { authService, UserClaims } from '../api/index.js';
 import { soundFx } from '../utils/soundEffects.js';
+import { supabase, isSupabaseConfigured } from '../lib/supabase.js';
 
 export interface AuthModalProps {
   isOpen: boolean;
@@ -383,9 +384,19 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               <div className="grid grid-cols-2 gap-2.5 pt-1">
                 <button
                   type="button"
-                  onClick={() => {
+                  onClick={async () => {
                     soundFx.playClick();
-                    setErrorMessage('Google OAuth is configured and ready for production deployment.');
+                    if (!isSupabaseConfigured || !supabase) {
+                      setErrorMessage('Google OAuth is not yet configured. Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in your environment.');
+                      return;
+                    }
+                    const { error } = await supabase.auth.signInWithOAuth({
+                      provider: 'google',
+                      options: {
+                        redirectTo: window.location.origin,
+                      },
+                    });
+                    if (error) setErrorMessage(error.message);
                   }}
                   className="py-2.5 px-3 rounded-xl bg-white border border-slate-200 hover:bg-slate-50 text-xs font-medium text-slate-700 flex items-center justify-center gap-2 transition-all cursor-pointer"
                 >
@@ -412,9 +423,19 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
                 <button
                   type="button"
-                  onClick={() => {
+                  onClick={async () => {
                     soundFx.playClick();
-                    setErrorMessage('GitHub OAuth is configured and ready for production deployment.');
+                    if (!isSupabaseConfigured || !supabase) {
+                      setErrorMessage('GitHub OAuth is not yet configured. Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in your environment.');
+                      return;
+                    }
+                    const { error } = await supabase.auth.signInWithOAuth({
+                      provider: 'github',
+                      options: {
+                        redirectTo: window.location.origin,
+                      },
+                    });
+                    if (error) setErrorMessage(error.message);
                   }}
                   className="py-2.5 px-3 rounded-xl bg-white border border-slate-200 hover:bg-slate-50 text-xs font-medium text-slate-700 flex items-center justify-center gap-2 transition-all cursor-pointer"
                 >

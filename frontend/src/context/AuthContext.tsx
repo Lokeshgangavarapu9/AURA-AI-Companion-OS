@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react';
 import { authService, UserClaims } from '../api/index.js';
+import { supabase, isSupabaseConfigured } from '../lib/supabase.js';
 
 export interface AuthContextType {
   user: UserClaims | null;
@@ -24,25 +25,34 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const [isAuthModalOpen, setIsAuthModalOpen] = useState<boolean>(false);
   const [authModalMode, setAuthModalMode] = useState<'login' | 'register'>('login');
 
-  const restoreSession = useCallback(async () => {
+  /**
+   * Restore session using stored AURA token (email/password flow)
+   * or exchange a Supabase access token with the backend.
+   */
+  const restoreSession = useCallback(async (supabaseToken?: string) => {
     setIsLoading(true);
     try {
-      if (authService.isAuthenticated()) {
+      const token = supabaseToken || authService.getToken();
+
+      if (token) {
+        // If this is a Supabase token, store it for subsequent API calls
+        if (supabaseToken) {
+          authService.setToken(supabaseToken);
+        }
+
         const res = await authService.getMe();
         if (res.success && res.data?.data?.user) {
           setUser(res.data.data.user);
-        } else {
-          authService.clearToken();
-          setUser(null);
-          setIsAuthModalOpen(true);
-          setAuthModalMode('login');
+          setIsAuthModalOpen(false);
+          return;
         }
-      } else {
-        // Protect application: prompt unauthenticated users
-        setUser(null);
-        setIsAuthModalOpen(true);
-        setAuthModalMode('login');
       }
+
+      // No valid session — prompt login
+      authService.clearToken();
+      setUser(null);
+      setIsAuthModalOpen(true);
+      setAuthModalMode('login');
     } catch {
       authService.clearToken();
       setUser(null);
@@ -54,7 +64,39 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   }, []);
 
   useEffect(() => {
-    restoreSession();
+    // --- Supabase session listener (Google/GitHub OAuth + email magic link) ---
+    if (isSupabaseConfigured && supabase) {
+      const { data: { subscription } } = supabase.auth.onAuthStateChange(
+        async (event, session) => {
+          if ((event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') && session?.access_token) {
+            // Exchange Supabase access token with AURA backend for user identity
+            await restoreSession(session.access_token);
+          } else if (event === 'SIGNED_OUT') {
+            authService.clearToken();
+            setUser(null);
+            setIsAuthModalOpen(true);
+            setAuthModalMode('login');
+          }
+        }
+      );
+
+      // Check for an existing Supabase session on mount
+      supabase.auth.getSession().then(async ({ data: { session } }) => {
+        if (session?.access_token) {
+          await restoreSession(session.access_token);
+        } else {
+          // Fall back to AURA token (email/password sessions)
+          await restoreSession();
+        }
+      });
+
+      return () => {
+        subscription.unsubscribe();
+      };
+    } else {
+      // Supabase not configured — use AURA token only
+      restoreSession();
+    }
 
     const handleUnauthorized = () => {
       setUser(null);
@@ -74,6 +116,22 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       window.removeEventListener('aura:auth_state_changed', handleAuthStateChanged);
     };
   }, [restoreSession]);
+
+  // Also attach window event listeners when Supabase IS configured
+  useEffect(() => {
+    if (!isSupabaseConfigured) return;
+
+    const handleUnauthorized = () => {
+      setUser(null);
+      setIsAuthModalOpen(true);
+      setAuthModalMode('login');
+    };
+
+    window.addEventListener('aura:unauthorized', handleUnauthorized);
+    return () => {
+      window.removeEventListener('aura:unauthorized', handleUnauthorized);
+    };
+  }, []);
 
   const login = async (params: { email: string; password: string }) => {
     const res = await authService.login(params);
@@ -102,6 +160,10 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   };
 
   const logout = async () => {
+    // Sign out from Supabase if configured
+    if (isSupabaseConfigured && supabase) {
+      await supabase.auth.signOut().catch(() => {});
+    }
     await authService.logout();
     setUser(null);
     setIsAuthModalOpen(true);
