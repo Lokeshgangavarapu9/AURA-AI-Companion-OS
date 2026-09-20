@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import crypto from 'crypto';
 import { logger } from '../utils/logger.js';
+import { metricsRegistry } from '../observability/metrics.registry.js';
 
 // Extend Express Request interface to store startTime and requestId
 declare global {
@@ -28,6 +29,8 @@ export const requestLogger = (req: Request, res: Response, next: NextFunction): 
   res.on('finish', () => {
     const responseTime = Date.now() - (req.startTime || Date.now());
     const logLevel = res.statusCode >= 500 ? 'error' : res.statusCode >= 400 ? 'warn' : 'info';
+
+    metricsRegistry.recordHttpRequest(res.statusCode, responseTime);
 
     logger[logLevel]({
       requestId,

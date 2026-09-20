@@ -8,6 +8,7 @@ import profileRoutes from './profile.routes.js';
 import authRoutes from './auth.routes.js';
 import visionRoutes from './vision.routes.js';
 import workspaceRoutes from './workspace.routes.js';
+import metricsRoutes from './metrics.routes.js';
 
 const apiRouter = Router();
 
@@ -21,5 +22,6 @@ apiRouter.use('/', settingsRoutes);
 apiRouter.use('/', profileRoutes);
 apiRouter.use('/', visionRoutes);
 apiRouter.use('/', workspaceRoutes);
+apiRouter.use('/', metricsRoutes);
 
 export default apiRouter;
