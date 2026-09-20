@@ -18,6 +18,7 @@ model User {
   passwordHash       String?
   provider           String                 @default("local") // 'local' | 'google' | 'github' | 'apple'
   providerId         String?                // External OAuth provider ID
+  supabaseUserId     String?                @unique // Supabase Auth User UUID mapping
   isVerified         Boolean                @default(true)    // Ready for email verification workflows
   verificationToken  String?
   resetToken         String?
@@ -35,6 +36,7 @@ model User {
   voiceSessions      VoiceSessionRecord[]
 
   @@index([email])
+  @@index([supabaseUserId])
 }
 
 // User Profile Model (User-scoped single source of truth for identity details)

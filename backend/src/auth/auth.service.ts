@@ -14,6 +14,7 @@ import {
   OAuthProfileDto,
   AuthenticatedUserPayload,
 } from './auth.types.js';
+import { VerifiedSupabaseUser } from './supabase.client.js';
 import { logger } from '../utils/logger.js';
 
 export class AuthService {
@@ -316,6 +317,111 @@ export class AuthService {
             avatarUrl: user.profile.avatarUrl,
           }
         : null,
+    };
+  }
+
+  /**
+   * Synchronizes an authenticated Supabase identity with the Neon PostgreSQL database.
+   * Maps 1-to-1 to an AURA User, auto-provisioning initial profile, settings, and relationship.
+   */
+  public async syncSupabaseUser(supabaseUser: VerifiedSupabaseUser): Promise<AuthenticatedUserPayload & { profile: any; settings: any; relationshipState?: any }> {
+    const normalizedEmail = (supabaseUser.email || '').trim().toLowerCase();
+
+    // 1. Look up by supabaseUserId first, then fallback to email
+    let user = await prisma.user.findFirst({
+      where: {
+        OR: [
+          { supabaseUserId: supabaseUser.id },
+          ...(normalizedEmail ? [{ email: normalizedEmail }] : []),
+        ],
+      },
+      include: {
+        profile: true,
+        settings: true,
+        relationshipState: true,
+      },
+    });
+
+    if (user) {
+      // Backfill supabaseUserId if missing
+      if (!user.supabaseUserId || user.supabaseUserId !== supabaseUser.id) {
+        user = await prisma.user.update({
+          where: { id: user.id },
+          data: {
+            supabaseUserId: supabaseUser.id,
+            provider: supabaseUser.provider || user.provider,
+            lastLoginAt: new Date(),
+          },
+          include: {
+            profile: true,
+            settings: true,
+            relationshipState: true,
+          },
+        });
+      } else {
+        await prisma.user.update({
+          where: { id: user.id },
+          data: { lastLoginAt: new Date() },
+        });
+      }
+    } else {
+      // Provision new user in atomic transaction
+      user = await prisma.$transaction(async (tx) => {
+        const created = await tx.user.create({
+          data: {
+            email: normalizedEmail || `user_${supabaseUser.id}@aura.os`,
+            name: supabaseUser.name || 'Explorer',
+            supabaseUserId: supabaseUser.id,
+            provider: supabaseUser.provider || 'supabase',
+            isVerified: true,
+          },
+        });
+
+        const profile = await tx.userProfile.create({
+          data: {
+            userId: created.id,
+            name: supabaseUser.name || 'Explorer',
+            avatarUrl: supabaseUser.avatarUrl,
+            bio: 'Ready to explore with AURA',
+          },
+        });
+
+        const settings = await tx.settings.create({
+          data: {
+            userId: created.id,
+            theme: 'obsidian',
+            personality: 'aura-gentle',
+            conversationStyle: 'empathic',
+          },
+        });
+
+        const relationshipState = await tx.userRelationshipState.create({
+          data: {
+            userId: created.id,
+            level: 'stranger',
+            trustScore: 10,
+            affinityScore: 10,
+            relationshipHealth: 15,
+            interactionDepth: 20,
+          },
+        });
+
+        return {
+          ...created,
+          profile,
+          settings,
+          relationshipState,
+        };
+      });
+
+      logger.info({ userId: user.id, supabaseUserId: supabaseUser.id, email: user.email }, '✅ Synchronized new Supabase user in Neon PostgreSQL');
+    }
+
+    return {
+      ...this.mapUser(user),
+      profile: user.profile,
+      settings: user.settings,
+      relationshipState: user.relationshipState,
     };
   }
 

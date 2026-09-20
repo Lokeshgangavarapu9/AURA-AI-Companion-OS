@@ -86,6 +86,12 @@ const envSchema = z.object({
   GOOGLE_CLIENT_ID: z.string().optional().default(''),
   GOOGLE_CLIENT_SECRET: z.string().optional().default(''),
   GOOGLE_REDIRECT_URI: z.string().optional().default('http://localhost:5000/api/v1/workspace/auth/callback'),
+
+  // Supabase Auth Configuration
+  SUPABASE_URL: z.string().optional().default(''),
+  SUPABASE_PUBLISHABLE_KEY: z.string().optional().default(''),
+  SUPABASE_ANON_KEY: z.string().optional().default(''),
+  SUPABASE_JWT_SECRET: z.string().optional().default(''),
 });
 
 // Parse and validate process.env
