@@ -25,9 +25,15 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const [isAuthModalOpen, setIsAuthModalOpen] = useState<boolean>(false);
   const [authModalMode, setAuthModalMode] = useState<'login' | 'register'>('login');
 
+  /** Show auth modal */
+  const showAuthModal = useCallback(() => {
+    setIsAuthModalOpen(true);
+    setAuthModalMode('login');
+  }, []);
+
   /**
-   * Restore session using stored AURA token (email/password flow)
-   * or exchange a Supabase access token with the backend.
+   * Exchange a Supabase access_token with the AURA backend to resolve the Neon user record,
+   * OR restore an existing AURA token session. 
    */
   const restoreSession = useCallback(async (supabaseToken?: string) => {
     setIsLoading(true);
@@ -35,7 +41,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       const token = supabaseToken || authService.getToken();
 
       if (token) {
-        // If this is a Supabase token, store it for subsequent API calls
+        // Store Supabase token for subsequent API calls
         if (supabaseToken) {
           authService.setToken(supabaseToken);
         }
@@ -51,57 +57,64 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       // No valid session — prompt login
       authService.clearToken();
       setUser(null);
-      setIsAuthModalOpen(true);
-      setAuthModalMode('login');
+      showAuthModal();
     } catch {
       authService.clearToken();
       setUser(null);
-      setIsAuthModalOpen(true);
-      setAuthModalMode('login');
+      showAuthModal();
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [showAuthModal]);
 
+  // -----------------------------------------------------------------------
+  // Effect 1: Supabase session listener + initial session restore
+  // -----------------------------------------------------------------------
   useEffect(() => {
-    // --- Supabase session listener (Google/GitHub OAuth + email magic link) ---
-    if (isSupabaseConfigured && supabase) {
-      const { data: { subscription } } = supabase.auth.onAuthStateChange(
-        async (event, session) => {
-          if ((event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') && session?.access_token) {
-            // Exchange Supabase access token with AURA backend for user identity
-            await restoreSession(session.access_token);
-          } else if (event === 'SIGNED_OUT') {
-            authService.clearToken();
-            setUser(null);
-            setIsAuthModalOpen(true);
-            setAuthModalMode('login');
-          }
-        }
-      );
-
-      // Check for an existing Supabase session on mount
-      supabase.auth.getSession().then(async ({ data: { session } }) => {
-        if (session?.access_token) {
-          await restoreSession(session.access_token);
-        } else {
-          // Fall back to AURA token (email/password sessions)
-          await restoreSession();
-        }
-      });
-
-      return () => {
-        subscription.unsubscribe();
-      };
-    } else {
-      // Supabase not configured — use AURA token only
+    if (!isSupabaseConfigured || !supabase) {
+      // Supabase not configured — restore AURA token only
       restoreSession();
+      return;
     }
 
+    // Subscribe to all Supabase auth state changes (OAuth redirects, refresh, sign-out)
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(
+      async (event, session) => {
+        if ((event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'INITIAL_SESSION') && session?.access_token) {
+          await restoreSession(session.access_token);
+        } else if (event === 'SIGNED_OUT') {
+          authService.clearToken();
+          setUser(null);
+          setIsLoading(false);
+          showAuthModal();
+        }
+      }
+    );
+
+    // Check for an existing Supabase session on mount (handles page refresh)
+    supabase.auth.getSession().then(async ({ data: { session } }) => {
+      if (session?.access_token) {
+        await restoreSession(session.access_token);
+      } else {
+        // Fall back to AURA token (email/password sessions)
+        await restoreSession();
+      }
+    });
+
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, [restoreSession, showAuthModal]);
+
+  // -----------------------------------------------------------------------
+  // Effect 2: Global window event listeners (aura:unauthorized, aura:auth_state_changed)
+  // These are always set up regardless of Supabase configuration.
+  // -----------------------------------------------------------------------
+  useEffect(() => {
     const handleUnauthorized = () => {
+      authService.clearToken();
       setUser(null);
-      setIsAuthModalOpen(true);
-      setAuthModalMode('login');
+      showAuthModal();
     };
 
     const handleAuthStateChanged = () => {
@@ -115,23 +128,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       window.removeEventListener('aura:unauthorized', handleUnauthorized);
       window.removeEventListener('aura:auth_state_changed', handleAuthStateChanged);
     };
-  }, [restoreSession]);
-
-  // Also attach window event listeners when Supabase IS configured
-  useEffect(() => {
-    if (!isSupabaseConfigured) return;
-
-    const handleUnauthorized = () => {
-      setUser(null);
-      setIsAuthModalOpen(true);
-      setAuthModalMode('login');
-    };
-
-    window.addEventListener('aura:unauthorized', handleUnauthorized);
-    return () => {
-      window.removeEventListener('aura:unauthorized', handleUnauthorized);
-    };
-  }, []);
+  }, [restoreSession, showAuthModal]);
 
   const login = async (params: { email: string; password: string }) => {
     const res = await authService.login(params);
@@ -165,9 +162,9 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       await supabase.auth.signOut().catch(() => {});
     }
     await authService.logout();
+    authService.clearToken();
     setUser(null);
-    setIsAuthModalOpen(true);
-    setAuthModalMode('login');
+    showAuthModal();
   };
 
   const openAuthModal = (mode: 'login' | 'register' = 'login') => {
@@ -176,7 +173,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   };
 
   const closeAuthModal = () => {
-    // Only close if user is authenticated to keep protected state safe
+    // Only allow closing the modal if the user is authenticated
     if (user) {
       setIsAuthModalOpen(false);
     }

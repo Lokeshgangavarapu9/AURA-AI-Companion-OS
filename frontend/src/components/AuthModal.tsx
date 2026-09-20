@@ -42,12 +42,14 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [infoMessage, setInfoMessage] = useState<string | null>(null);
 
   if (!isOpen) return null;
 
   const resetForm = () => {
     setErrorMessage(null);
     setSuccessMessage(null);
+    setInfoMessage(null);
   };
 
   const handleSwitchMode = (newMode: AuthMode) => {
@@ -231,6 +233,13 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             </div>
           )}
 
+          {infoMessage && (
+            <div className="p-3 rounded-2xl bg-sky-50 border border-sky-200/80 text-sky-700 text-xs flex items-center gap-2 animate-in fade-in">
+              <ShieldCheck className="w-4 h-4 shrink-0 text-sky-500" />
+              <span>{infoMessage}</span>
+            </div>
+          )}
+
           {/* Form */}
           <form onSubmit={handleSubmit} className="space-y-3.5">
             {mode === 'register' && (
@@ -386,14 +395,16 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   type="button"
                   onClick={async () => {
                     soundFx.playClick();
+                    setInfoMessage(null);
                     if (!isSupabaseConfigured || !supabase) {
-                      setErrorMessage('Google OAuth is not yet configured. Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in your environment.');
+                      setInfoMessage('To enable Google sign-in, add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY to your Vercel environment variables.');
                       return;
                     }
                     const { error } = await supabase.auth.signInWithOAuth({
                       provider: 'google',
                       options: {
-                        redirectTo: window.location.origin,
+                        redirectTo: `${window.location.origin}`,
+                        queryParams: { access_type: 'offline', prompt: 'consent' },
                       },
                     });
                     if (error) setErrorMessage(error.message);
@@ -425,14 +436,15 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   type="button"
                   onClick={async () => {
                     soundFx.playClick();
+                    setInfoMessage(null);
                     if (!isSupabaseConfigured || !supabase) {
-                      setErrorMessage('GitHub OAuth is not yet configured. Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in your environment.');
+                      setInfoMessage('To enable GitHub sign-in, add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY to your Vercel environment variables.');
                       return;
                     }
                     const { error } = await supabase.auth.signInWithOAuth({
                       provider: 'github',
                       options: {
-                        redirectTo: window.location.origin,
+                        redirectTo: `${window.location.origin}`,
                       },
                     });
                     if (error) setErrorMessage(error.message);

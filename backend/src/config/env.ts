@@ -92,6 +92,9 @@ const envSchema = z.object({
   SUPABASE_PUBLISHABLE_KEY: z.string().optional().default(''),
   SUPABASE_ANON_KEY: z.string().optional().default(''),
   SUPABASE_JWT_SECRET: z.string().optional().default(''),
+
+  // Frontend URL for CORS
+  FRONTEND_URL: z.string().optional().default(''),
 });
 
 // Parse and validate process.env

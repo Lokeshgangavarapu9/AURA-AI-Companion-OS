@@ -18,7 +18,7 @@ import {
 } from './protocol/audio.protocol.js';
 import { VoiceInputStream } from './stream/voice.stream.js';
 import { VoiceState } from './types/voice.types.js';
-import { TokenService } from '../auth/token.service.js';
+import { verifySupabaseToken } from '../auth/supabase.client.js';
 import { logger } from '../utils/logger.js';
 
 interface ActiveSocketState {
@@ -47,21 +47,27 @@ export class VoiceGateway {
   public initialize(server: HttpServer, path: string = '/ws/voice'): WebSocketServer {
     this.wss = new WebSocketServer({ server, path });
 
-    this.wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {
-      // Extract authentication token if present in query parameters (?token=...)
+    this.wss.on('connection', async (ws: WebSocket, req: IncomingMessage) => {
+      // Extract and verify authentication token from query parameters (?token=...)
       let authenticatedUserId: string | undefined;
       try {
         const parsedUrl = new URL(req.url || '', `http://${req.headers.host || 'localhost'}`);
         const token = parsedUrl.searchParams.get('token');
         if (token) {
-          const claims = TokenService.verifyAccessToken(token);
-          authenticatedUserId = claims.userId;
+          // Verify using the full Supabase→JWT→AURA fallback chain
+          const verified = await verifySupabaseToken(token);
+          authenticatedUserId = verified.id; // Supabase sub === AURA userId after sync
           logger.info({ userId: authenticatedUserId }, '🎙️ VoiceGateway: Authenticated WebSocket client connected');
         } else {
-          logger.info('🎙️ VoiceGateway: Anonymous WebSocket client connected');
+          // Voice requires authentication — reject unauthenticated connections
+          logger.warn('⚠️ VoiceGateway: Rejected unauthenticated WebSocket connection (no token)');
+          ws.close(4001, 'Authentication required');
+          return;
         }
       } catch (tokenErr) {
-        logger.warn({ err: tokenErr }, '⚠️ VoiceGateway: Invalid token in WebSocket handshake');
+        logger.warn({ err: tokenErr }, '⚠️ VoiceGateway: Invalid or expired token — closing connection');
+        ws.close(4003, 'Invalid or expired token');
+        return;
       }
 
       ws.on('message', async (data: Buffer | string) => {

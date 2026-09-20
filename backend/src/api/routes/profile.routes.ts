@@ -2,34 +2,18 @@ import { Router, Request, Response } from 'express';
 import { prisma } from '../../database/client.js';
 import { sqliteMemoryRepository } from '../../memory/storage/sqlite.repository.js';
 import { relationshipRepository } from '../../relationship/storage/relationship.repository.js';
-import { optionalAuthenticateUser } from '../../middleware/auth.middleware.js';
+import { authenticateUser } from '../../middleware/auth.middleware.js';
 import { HTTP_STATUS } from '../../config/index.js';
 
 const router = Router();
 
-router.use(optionalAuthenticateUser);
-
-async function getEffectiveUserId(req: Request): Promise<string> {
-  const userId = (req as any).user?.userId;
-  if (userId) return userId;
-
-  const existing = await prisma.user.findFirst();
-  if (existing) return existing.id;
-
-  const created = await prisma.user.create({
-    data: {
-      email: 'user@aura.os',
-      name: 'Alex',
-      provider: 'local',
-    },
-  });
-  return created.id;
-}
+// All profile routes require a verified user identity
+router.use(authenticateUser);
 
 // GET /api/v1/profile
 router.get('/profile', async (req: Request, res: Response) => {
   try {
-    const userId = await getEffectiveUserId(req);
+    const userId = (req as any).user!.userId;
     const profile = await sqliteMemoryRepository.getUserProfile(userId);
     const user = await prisma.user.findUnique({ where: { id: userId } });
 
@@ -80,9 +64,9 @@ router.get('/profile', async (req: Request, res: Response) => {
     res.status(HTTP_STATUS.OK).json({
       status: 'ok',
       data: {
-        id: profile?.id || 'default-profile',
-        name: profile?.name || user?.name || 'Alex',
-        email: user?.email || 'alex@aura.os',
+        id: profile?.id || userId,
+        name: profile?.name || user?.name || 'Explorer',
+        email: user?.email || '',
         avatarUrl: profile?.avatarUrl || null,
         relationshipLevel,
         daysTogether,
@@ -104,10 +88,10 @@ router.get('/profile', async (req: Request, res: Response) => {
           signalCuriosity > 7 ? { name: 'Curious', category: 'emotion' } : null,
         ].filter(Boolean),
         personalization: {
-          nickname: profile?.name || user?.name || 'Alex',
-          companionName: 'Shizuka',
+          nickname: profile?.name || user?.name || 'Explorer',
+          companionName: 'AURA',
           language: 'English (US)',
-          theme: 'Blush Rose & Warm White',
+          theme: 'Obsidian',
         },
       },
     });
@@ -125,10 +109,10 @@ router.get('/profile', async (req: Request, res: Response) => {
 // POST /api/v1/profile
 router.post('/profile', async (req: Request, res: Response) => {
   try {
-    const userId = await getEffectiveUserId(req);
-    const { name, email, age, occupation, college, bio, avatarUrl } = req.body;
+    const userId = (req as any).user!.userId;
+    const { name, age, occupation, college, bio, avatarUrl } = req.body;
 
-    // Update or create Profile details in DB
+    // Update or create Profile details in DB (email changes are not allowed via profile endpoint)
     const profile = await sqliteMemoryRepository.updateUserProfile(
       {
         name,
@@ -141,13 +125,11 @@ router.post('/profile', async (req: Request, res: Response) => {
       userId
     );
 
-    if (email || name) {
+    // Update User display name if provided
+    if (name) {
       await prisma.user.update({
         where: { id: userId },
-        data: {
-          ...(email && { email }),
-          ...(name && { name }),
-        },
+        data: { name },
       });
     }
 

@@ -1,36 +1,17 @@
 import { Router, Request, Response } from 'express';
 import { prisma } from '../../database/client.js';
-import { optionalAuthenticateUser } from '../../middleware/auth.middleware.js';
+import { authenticateUser } from '../../middleware/auth.middleware.js';
 import { HTTP_STATUS } from '../../config/index.js';
 
 const router = Router();
 
-router.use(optionalAuthenticateUser);
-
-/**
- * Resolves effective userId from request claims or baseline user.
- */
-async function getEffectiveUserId(req: Request): Promise<string> {
-  const userId = (req as any).user?.userId;
-  if (userId) return userId;
-
-  const existing = await prisma.user.findFirst();
-  if (existing) return existing.id;
-
-  const created = await prisma.user.create({
-    data: {
-      email: 'user@aura.os',
-      name: 'Alex',
-      provider: 'local',
-    },
-  });
-  return created.id;
-}
+// All settings routes require a verified user identity
+router.use(authenticateUser);
 
 // GET /api/v1/settings
 router.get('/settings', async (req: Request, res: Response) => {
   try {
-    const userId = await getEffectiveUserId(req);
+    const userId = (req as any).user!.userId;
 
     let settings = await prisma.settings.findUnique({
       where: { userId },
@@ -60,7 +41,7 @@ router.get('/settings', async (req: Request, res: Response) => {
 // PUT /api/v1/settings
 router.put('/settings', async (req: Request, res: Response) => {
   try {
-    const userId = await getEffectiveUserId(req);
+    const userId = (req as any).user!.userId;
 
     // Remove immutable fields if present in req.body
     const { id: _id, userId: _uId, createdAt: _cAt, updatedAt: _uAt, ...updateData } = req.body;

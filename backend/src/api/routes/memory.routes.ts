@@ -1,11 +1,11 @@
 import { Router, Request, Response } from 'express';
 import { sqliteMemoryRepository } from '../../memory/storage/sqlite.repository.js';
-import { optionalAuthenticateUser } from '../../middleware/auth.middleware.js';
+import { authenticateUser } from '../../middleware/auth.middleware.js';
 import { HTTP_STATUS } from '../../config/index.js';
 
 const router = Router();
 
-router.use(optionalAuthenticateUser);
+router.use(authenticateUser);
 
 /**
  * GET /api/v1/memory

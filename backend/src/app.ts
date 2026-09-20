@@ -36,12 +36,25 @@ export const createApp = (): Application => {
   );
 
   // 2. Cross-Origin Resource Sharing (CORS) Middleware with Origin Verification
+  const allowedOrigins = new Set<string>([
+    'http://localhost:3000',
+    'http://localhost:5173',
+    'http://localhost:4173',
+    'http://127.0.0.1:3000',
+    'http://127.0.0.1:5173',
+  ]);
+
+  // Add production frontend URL if configured
+  if (process.env.FRONTEND_URL) {
+    process.env.FRONTEND_URL.split(',').map((u) => u.trim()).filter(Boolean).forEach((u) => allowedOrigins.add(u));
+  }
+
   const isAllowedOrigin = (origin: string): boolean => {
-    if (!origin) return true; // allow mobile apps, curl, server-to-server
+    if (!origin) return true; // allow server-to-server, curl, mobile
     if (origin.startsWith('http://localhost:') || origin.startsWith('http://127.0.0.1:')) return true;
+    // Allow all *.vercel.app preview deployments
     if (origin.endsWith('.vercel.app') || origin === 'https://vercel.app') return true;
-    if (process.env.FRONTEND_URL && origin === process.env.FRONTEND_URL) return true;
-    return true; // Permissive for preview branches while enforcing headers
+    return allowedOrigins.has(origin);
   };
 
   app.use(
