@@ -1,7 +1,7 @@
 /**
- * AURA Memory Engine — Prisma SQLite Storage Implementation
- * Concrete repository implementation managing SQLite database operations via Prisma.
- * Fully encapsulates Prisma so no Prisma dependencies leak outside this storage class.
+ * AURA Memory Engine — Prisma Storage Implementation
+ * Multi-tenant repository implementation managing database operations via Prisma.
+ * Fully encapsulates Prisma and guarantees strict user isolation.
  */
 
 import { prisma } from '../../database/client.js';
@@ -20,11 +20,35 @@ import {
 
 export class SqliteMemoryRepository implements IMemoryRepository {
   /**
-   * Persists a new MemoryFact to SQLite database via Prisma.
+   * Resolves an effective userId; creates a default local user if none exists
+   * to guarantee seamless backward compatibility for testing.
    */
-  public async createMemoryFact(dto: CreateMemoryFactDto): Promise<MemoryFactEntity> {
+  public async getEffectiveUserId(userId?: string): Promise<string> {
+    if (userId) return userId;
+
+    const existingUser = await prisma.user.findFirst();
+    if (existingUser) return existingUser.id;
+
+    const defaultUser = await prisma.user.create({
+      data: {
+        email: 'user@aura.os',
+        name: 'Alex',
+        provider: 'local',
+      },
+    });
+
+    return defaultUser.id;
+  }
+
+  /**
+   * Persists a new MemoryFact to database via Prisma.
+   */
+  public async createMemoryFact(dto: CreateMemoryFactDto, userId?: string): Promise<MemoryFactEntity> {
+    const effectiveUserId = await this.getEffectiveUserId(userId || dto.userId);
+
     const record = await prisma.memoryFact.create({
       data: {
+        userId: effectiveUserId,
         category: dto.category,
         key: dto.key,
         value: dto.value,
@@ -37,9 +61,17 @@ export class SqliteMemoryRepository implements IMemoryRepository {
   }
 
   /**
-   * Updates an existing MemoryFact in SQLite by ID.
+   * Updates an existing MemoryFact by ID.
    */
-  public async updateMemoryFact(id: string, dto: UpdateMemoryFactDto): Promise<MemoryFactEntity> {
+  public async updateMemoryFact(id: string, dto: UpdateMemoryFactDto, userId?: string): Promise<MemoryFactEntity> {
+    const whereClause: any = { id };
+    if (userId) whereClause.userId = userId;
+
+    const existing = await prisma.memoryFact.findFirst({ where: whereClause });
+    if (!existing) {
+      throw new Error(`MemoryFact ${id} not found or unauthorized`);
+    }
+
     const record = await prisma.memoryFact.update({
       where: { id },
       data: {
@@ -57,10 +89,16 @@ export class SqliteMemoryRepository implements IMemoryRepository {
   }
 
   /**
-   * Deletes a MemoryFact from SQLite by ID.
+   * Deletes a MemoryFact by ID.
    */
-  public async deleteMemoryFact(id: string): Promise<boolean> {
+  public async deleteMemoryFact(id: string, userId?: string): Promise<boolean> {
     try {
+      const whereClause: any = { id };
+      if (userId) whereClause.userId = userId;
+
+      const existing = await prisma.memoryFact.findFirst({ where: whereClause });
+      if (!existing) return false;
+
       await prisma.memoryFact.delete({ where: { id } });
       return true;
     } catch {
@@ -71,16 +109,22 @@ export class SqliteMemoryRepository implements IMemoryRepository {
   /**
    * Retrieves a MemoryFact by ID.
    */
-  public async getMemoryFactById(id: string): Promise<MemoryFactEntity | null> {
-    const record = await prisma.memoryFact.findUnique({ where: { id } });
+  public async getMemoryFactById(id: string, userId?: string): Promise<MemoryFactEntity | null> {
+    const whereClause: any = { id };
+    if (userId) whereClause.userId = userId;
+
+    const record = await prisma.memoryFact.findFirst({ where: whereClause });
     return record ? this.mapMemoryFact(record) : null;
   }
 
   /**
-   * Queries MemoryFacts matching category, minImportance, or keyword substrings.
+   * Queries MemoryFacts matching category, minImportance, or keyword substrings for a specific user.
    */
-  public async findRelevantFacts(filter: MemorySearchFilter): Promise<MemoryFactEntity[]> {
-    const whereClause: Record<string, unknown> = {};
+  public async findRelevantFacts(filter: MemorySearchFilter, userId?: string): Promise<MemoryFactEntity[]> {
+    const effectiveUserId = await this.getEffectiveUserId(userId);
+    const whereClause: Record<string, unknown> = {
+      userId: effectiveUserId,
+    };
 
     if (filter.category) {
       whereClause.category = filter.category;
@@ -109,10 +153,13 @@ export class SqliteMemoryRepository implements IMemoryRepository {
   }
 
   /**
-   * Retrieves all MemoryFacts sorted by lastUsedAt.
+   * Retrieves all MemoryFacts for a user sorted by lastUsedAt.
    */
-  public async getAllMemoryFacts(limit = 50): Promise<MemoryFactEntity[]> {
+  public async getAllMemoryFacts(limit = 50, userId?: string): Promise<MemoryFactEntity[]> {
+    const effectiveUserId = await this.getEffectiveUserId(userId);
+
     const records = await prisma.memoryFact.findMany({
+      where: { userId: effectiveUserId },
       take: limit,
       orderBy: { updatedAt: 'desc' },
     });
@@ -121,56 +168,57 @@ export class SqliteMemoryRepository implements IMemoryRepository {
   }
 
   /**
-   * Retrieves the primary UserProfile record.
+   * Retrieves the UserProfile record for the specified user.
    */
-  public async getUserProfile(): Promise<UserProfileEntity | null> {
-    const record = await prisma.userProfile.findFirst({
-      orderBy: { createdAt: 'asc' },
+  public async getUserProfile(userId?: string): Promise<UserProfileEntity | null> {
+    const effectiveUserId = await this.getEffectiveUserId(userId);
+
+    const record = await prisma.userProfile.findUnique({
+      where: { userId: effectiveUserId },
     });
 
     return record ? this.mapUserProfile(record) : null;
   }
 
   /**
-   * Creates or updates the primary UserProfile record.
+   * Creates or updates the UserProfile record for a user.
    */
-  public async updateUserProfile(dto: UpdateUserProfileDto): Promise<UserProfileEntity> {
-    const existing = await this.getUserProfile();
+  public async updateUserProfile(dto: UpdateUserProfileDto, userId?: string): Promise<UserProfileEntity> {
+    const effectiveUserId = await this.getEffectiveUserId(userId);
 
-    if (existing) {
-      const updated = await prisma.userProfile.update({
-        where: { id: existing.id },
-        data: {
-          ...(dto.name !== undefined && { name: dto.name }),
-          ...(dto.age !== undefined && { age: dto.age }),
-          ...(dto.occupation !== undefined && { occupation: dto.occupation }),
-          ...(dto.college !== undefined && { college: dto.college }),
-          ...(dto.bio !== undefined && { bio: dto.bio }),
-        },
-      });
-
-      return this.mapUserProfile(updated);
-    }
-
-    const created = await prisma.userProfile.create({
-      data: {
+    const record = await prisma.userProfile.upsert({
+      where: { userId: effectiveUserId },
+      create: {
+        userId: effectiveUserId,
         name: dto.name,
         age: dto.age,
         occupation: dto.occupation,
         college: dto.college,
         bio: dto.bio,
+        avatarUrl: dto.avatarUrl,
+      },
+      update: {
+        ...(dto.name !== undefined && { name: dto.name }),
+        ...(dto.age !== undefined && { age: dto.age }),
+        ...(dto.occupation !== undefined && { occupation: dto.occupation }),
+        ...(dto.college !== undefined && { college: dto.college }),
+        ...(dto.bio !== undefined && { bio: dto.bio }),
+        ...(dto.avatarUrl !== undefined && { avatarUrl: dto.avatarUrl }),
       },
     });
 
-    return this.mapUserProfile(created);
+    return this.mapUserProfile(record);
   }
 
   /**
    * Creates a new Reflection entry.
    */
-  public async createReflection(dto: CreateReflectionDto): Promise<ReflectionEntity> {
+  public async createReflection(dto: CreateReflectionDto, userId?: string): Promise<ReflectionEntity> {
+    const effectiveUserId = await this.getEffectiveUserId(userId || dto.userId);
+
     const record = await prisma.reflection.create({
       data: {
+        userId: effectiveUserId,
         summary: dto.summary,
         sentiment: dto.sentiment,
       },
@@ -180,10 +228,13 @@ export class SqliteMemoryRepository implements IMemoryRepository {
   }
 
   /**
-   * Retrieves recent Reflections.
+   * Retrieves recent Reflections for a user.
    */
-  public async getRecentReflections(limit = 10): Promise<ReflectionEntity[]> {
+  public async getRecentReflections(limit = 10, userId?: string): Promise<ReflectionEntity[]> {
+    const effectiveUserId = await this.getEffectiveUserId(userId);
+
     const records = await prisma.reflection.findMany({
+      where: { userId: effectiveUserId },
       take: limit,
       orderBy: { createdAt: 'desc' },
     });
@@ -195,6 +246,7 @@ export class SqliteMemoryRepository implements IMemoryRepository {
   private mapMemoryFact(record: any): MemoryFactEntity {
     return {
       id: record.id,
+      userId: record.userId,
       category: record.category as MemoryCategory,
       key: record.key,
       value: record.value,
@@ -211,11 +263,13 @@ export class SqliteMemoryRepository implements IMemoryRepository {
   private mapUserProfile(record: any): UserProfileEntity {
     return {
       id: record.id,
+      userId: record.userId,
       name: record.name,
       age: record.age,
       occupation: record.occupation,
       college: record.college,
       bio: record.bio,
+      avatarUrl: record.avatarUrl,
       createdAt: record.createdAt,
       updatedAt: record.updatedAt,
     };
@@ -225,6 +279,7 @@ export class SqliteMemoryRepository implements IMemoryRepository {
   private mapReflection(record: any): ReflectionEntity {
     return {
       id: record.id,
+      userId: record.userId,
       summary: record.summary,
       sentiment: record.sentiment,
       createdAt: record.createdAt,

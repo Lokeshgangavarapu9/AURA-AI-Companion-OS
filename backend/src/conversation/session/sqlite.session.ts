@@ -1,7 +1,7 @@
 /**
- * AURA Conversation Intelligence Engine — Prisma SQLite Session Repository
- * Concrete implementation managing SQLite session database queries via Prisma.
- * Encapsulates Prisma entirely so no Prisma imports leak outside this file.
+ * AURA Conversation Intelligence Engine — Prisma Session Repository
+ * Multi-tenant concrete implementation managing database queries via Prisma.
+ * Encapsulates Prisma entirely and enforces user-isolated session records.
  */
 
 import { prisma } from '../../database/client.js';
@@ -16,11 +16,35 @@ import {
 
 export class SqliteSessionRepository implements ISessionRepository {
   /**
-   * Creates a new ConversationSession record in SQLite.
+   * Resolves an effective userId; creates a default local user if none exists
+   * to guarantee seamless backward compatibility.
    */
-  public async createSession(dto?: CreateSessionDto): Promise<SessionMetadata> {
+  public async getEffectiveUserId(userId?: string): Promise<string> {
+    if (userId) return userId;
+
+    const existingUser = await prisma.user.findFirst();
+    if (existingUser) return existingUser.id;
+
+    const defaultUser = await prisma.user.create({
+      data: {
+        email: 'user@aura.os',
+        name: 'Alex',
+        provider: 'local',
+      },
+    });
+
+    return defaultUser.id;
+  }
+
+  /**
+   * Creates a new ConversationSession record in the database.
+   */
+  public async createSession(dto?: CreateSessionDto, userId?: string): Promise<SessionMetadata> {
+    const effectiveUserId = await this.getEffectiveUserId(userId || dto?.userId);
+
     const record = await prisma.conversationSession.create({
       data: {
+        userId: effectiveUserId,
         title: dto?.title ?? 'New Conversation',
         currentTopic: dto?.initialTopic ?? 'General',
         messageCount: 0,
@@ -33,9 +57,16 @@ export class SqliteSessionRepository implements ISessionRepository {
 
   /**
    * Retrieves all ConversationSessions sorted by pinned status (desc) and last interaction (desc).
+   * Scoped to userId if provided.
    */
-  public async listSessions(): Promise<SessionMetadata[]> {
+  public async listSessions(userId?: string): Promise<SessionMetadata[]> {
+    const whereClause: any = {};
+    if (userId) {
+      whereClause.userId = userId;
+    }
+
     const records = await prisma.conversationSession.findMany({
+      where: whereClause,
       orderBy: [
         { isPinned: 'desc' },
         { lastInteractionAt: 'desc' },
@@ -46,11 +77,16 @@ export class SqliteSessionRepository implements ISessionRepository {
   }
 
   /**
-   * Retrieves a ConversationSession by ID.
+   * Retrieves a ConversationSession by ID, optionally verifying userId ownership.
    */
-  public async getSessionById(sessionId: string): Promise<SessionMetadata | null> {
-    const record = await prisma.conversationSession.findUnique({
-      where: { id: sessionId },
+  public async getSessionById(sessionId: string, userId?: string): Promise<SessionMetadata | null> {
+    const whereClause: any = { id: sessionId };
+    if (userId) {
+      whereClause.userId = userId;
+    }
+
+    const record = await prisma.conversationSession.findFirst({
+      where: whereClause,
     });
 
     return record ? this.mapSession(record) : null;
@@ -59,7 +95,18 @@ export class SqliteSessionRepository implements ISessionRepository {
   /**
    * Updates metadata on an existing ConversationSession.
    */
-  public async updateSession(sessionId: string, data: Partial<SessionMetadata>): Promise<SessionMetadata> {
+  public async updateSession(sessionId: string, data: Partial<SessionMetadata>, userId?: string): Promise<SessionMetadata> {
+    const whereClause: any = { id: sessionId };
+    if (userId) {
+      whereClause.userId = userId;
+    }
+
+    // Verify session exists and belongs to user
+    const existing = await prisma.conversationSession.findFirst({ where: whereClause });
+    if (!existing) {
+      throw new Error(`ConversationSession ${sessionId} not found`);
+    }
+
     const record = await prisma.conversationSession.update({
       where: { id: sessionId },
       data: {
@@ -77,8 +124,16 @@ export class SqliteSessionRepository implements ISessionRepository {
   /**
    * Deletes a ConversationSession by ID.
    */
-  public async deleteSession(sessionId: string): Promise<boolean> {
+  public async deleteSession(sessionId: string, userId?: string): Promise<boolean> {
     try {
+      const whereClause: any = { id: sessionId };
+      if (userId) {
+        whereClause.userId = userId;
+      }
+
+      const existing = await prisma.conversationSession.findFirst({ where: whereClause });
+      if (!existing) return false;
+
       await prisma.conversationSession.delete({ where: { id: sessionId } });
       return true;
     } catch {
@@ -87,7 +142,7 @@ export class SqliteSessionRepository implements ISessionRepository {
   }
 
   /**
-   * Appends a new ChatMessageRecord to SQLite database.
+   * Appends a new ChatMessageRecord to database.
    */
   public async appendMessage(dto: AppendMessageDto): Promise<ChatMessageEntity> {
     const record = await prisma.chatMessageRecord.create({
@@ -129,6 +184,7 @@ export class SqliteSessionRepository implements ISessionRepository {
   private mapSession(record: any): SessionMetadata {
     return {
       id: record.id,
+      userId: record.userId,
       title: record.title,
       currentTopic: record.currentTopic,
       messageCount: record.messageCount,

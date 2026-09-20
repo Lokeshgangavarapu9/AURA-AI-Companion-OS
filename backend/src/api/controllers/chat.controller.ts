@@ -12,6 +12,7 @@ const chatRequestSchema = z.object({
 /**
  * Chat Controller
  * Handles POST /api/v1/chat endpoint requests using ConversationManager master orchestrator.
+ * Scoped to authenticated user.
  */
 export const handleChatMessage = async (req: Request, res: Response): Promise<void> => {
   const validation = chatRequestSchema.safeParse(req.body);
@@ -28,11 +29,13 @@ export const handleChatMessage = async (req: Request, res: Response): Promise<vo
   }
 
   const { message, sessionId } = validation.data;
+  const userId = (req as any).user?.userId;
 
   // Process conversation turn through ConversationManager
   const result = await conversationManager.processConversation({
     userMessage: message,
     sessionId,
+    userId,
   });
 
   const now = new Date();

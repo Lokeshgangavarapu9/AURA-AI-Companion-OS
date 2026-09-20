@@ -45,4 +45,13 @@ export const ENDPOINTS = {
     GET: '/settings',
     UPDATE: '/settings',
   },
+
+  AUTH: {
+    REGISTER: '/auth/register',
+    LOGIN: '/auth/login',
+    ME: '/auth/me',
+    FORGOT_PASSWORD: '/auth/forgot-password',
+    RESET_PASSWORD: '/auth/reset-password',
+    LOGOUT: '/auth/logout',
+  },
 } as const;

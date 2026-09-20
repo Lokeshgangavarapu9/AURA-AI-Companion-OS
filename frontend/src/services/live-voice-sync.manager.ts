@@ -12,7 +12,7 @@ export interface LiveVoiceSyncConfig {
   wsUrl?: string;
   onStateChanged?: (status: AIStatusMode, emotion?: AIEmotion) => void;
   onTranscriptionReceived?: (text: string, isFinal: boolean) => void;
-  onAiResponseText?: (text: string) => void;
+  onAiResponseText?: (text: string, conversationSessionId?: string) => void;
 }
 
 export class LiveVoiceSyncManager {
@@ -21,6 +21,8 @@ export class LiveVoiceSyncManager {
   private config: LiveVoiceSyncConfig;
   private ws?: WebSocket;
   private isDuplexActive = false;
+  private pendingAssistantText?: string;
+  private receivedAssistantAudio = false;
 
   constructor(config: LiveVoiceSyncConfig = {}, player: AudioPlayerService = audioPlayerService) {
     this.config = config;
@@ -58,6 +60,7 @@ export class LiveVoiceSyncManager {
 
     // 1. Stop active audio playback immediately
     this.playerService.stop();
+    if ('speechSynthesis' in window) window.speechSynthesis.cancel();
 
     // 2. Send WS interrupt frame
     this.micService.interrupt();
@@ -72,21 +75,35 @@ export class LiveVoiceSyncManager {
     switch (frame.type) {
       case 'AI_AUDIO_CHUNK':
         if (frame.audioBase64) {
+          this.receivedAssistantAudio = true;
           this.handleAiAudioChunk(frame.audioBase64, frame.sampleRate || 16000);
         }
         break;
       case 'AI_RESPONSE_TEXT':
         if (frame.text && this.config.onAiResponseText) {
-          this.config.onAiResponseText(frame.text);
+          this.config.onAiResponseText(frame.text, frame.conversationSessionId);
         }
+        this.pendingAssistantText = frame.text;
+        this.receivedAssistantAudio = false;
+        break;
+      case 'AI_AUDIO_END':
+        if (!this.receivedAssistantAudio && this.pendingAssistantText && 'speechSynthesis' in window) {
+          const utterance = new SpeechSynthesisUtterance(this.pendingAssistantText);
+          utterance.onstart = () => this.config.onStateChanged?.('speaking', 'happy');
+          utterance.onend = () => this.config.onStateChanged?.('listening', 'curious');
+          utterance.onerror = () => this.config.onStateChanged?.('listening', 'curious');
+          window.speechSynthesis.speak(utterance);
+        }
+        this.pendingAssistantText = undefined;
         break;
       case 'TRANSCRIPTION':
         if (frame.text && this.config.onTranscriptionReceived) {
           this.config.onTranscriptionReceived(frame.text, frame.isFinal ?? true);
         }
         break;
+      case 'STATE_CHANGED':
       case 'VOICE_STATE_CHANGED':
-        if (frame.state && this.config.onStateChanged) {
+        if ((frame.voiceState || frame.state) && this.config.onStateChanged) {
           const statusMap: Record<string, AIStatusMode> = {
             IDLE: 'idle',
             LISTENING: 'listening',
@@ -95,7 +112,7 @@ export class LiveVoiceSyncManager {
             SPEAKING: 'speaking',
             COMPLETED: 'idle',
           };
-          const mappedStatus = statusMap[frame.state] || 'idle';
+          const mappedStatus = statusMap[frame.voiceState || frame.state] || 'idle';
           this.config.onStateChanged(mappedStatus);
         }
         break;
@@ -130,6 +147,7 @@ export class LiveVoiceSyncManager {
     this.micService.stopRecording();
     this.micService.disconnect();
     this.playerService.stop();
+    if ('speechSynthesis' in window) window.speechSynthesis.cancel();
 
     if (this.config.onStateChanged) {
       this.config.onStateChanged('idle', 'neutral');

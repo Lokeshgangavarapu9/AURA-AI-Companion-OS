@@ -85,34 +85,9 @@ export class AudioPlayerService {
 
       source.start(0);
     } catch (err: any) {
-      console.warn('⚠️ AudioPlayerService: Decoding audio chunk fallback blip', err);
-      // Fallback synthetic web audio blip for simulated audio buffers in test/dev
-      this.playSyntheticBlip(ctx, options);
-    }
-  }
-
-  private playSyntheticBlip(ctx: AudioContext, options: AudioPlayOptions): void {
-    try {
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-
-      osc.type = 'sine';
-      osc.frequency.setValueAtTime(440, ctx.currentTime);
-      gain.gain.setValueAtTime(this.volume * 0.1, ctx.currentTime);
-
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-
-      osc.start();
-      osc.stop(ctx.currentTime + 0.15);
-
-      osc.onended = () => {
-        if (!this.isPaused && this.isPlaying) {
-          this.processQueue(options);
-        }
-      };
-    } catch {
       this.isPlaying = false;
+      console.error('AudioPlayerService: received an undecodable audio payload', err);
+      options.onError?.(err instanceof Error ? err : new Error('Unable to decode assistant audio'));
       if (options.onEnded) options.onEnded();
     }
   }

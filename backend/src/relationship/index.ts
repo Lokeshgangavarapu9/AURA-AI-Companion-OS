@@ -8,3 +8,4 @@ export * from './config/relationship.config.js';
 export * from './analyzer/relationship.analyzer.js';
 export * from './weight/weight.calculator.js';
 export * from './profile/profile.model.js';
+export * from './storage/relationship.repository.js';

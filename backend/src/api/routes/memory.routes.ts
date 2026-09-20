@@ -1,16 +1,20 @@
 import { Router, Request, Response } from 'express';
 import { sqliteMemoryRepository } from '../../memory/storage/sqlite.repository.js';
+import { optionalAuthenticateUser } from '../../middleware/auth.middleware.js';
 import { HTTP_STATUS } from '../../config/index.js';
 
 const router = Router();
 
+router.use(optionalAuthenticateUser);
+
 /**
  * GET /api/v1/memory
- * Retrieves all memory facts.
+ * Retrieves all memory facts for the authenticated user.
  */
 router.get('/memory', async (req: Request, res: Response) => {
   try {
-    const facts = await sqliteMemoryRepository.getAllMemoryFacts();
+    const userId = (req as any).user?.userId;
+    const facts = await sqliteMemoryRepository.getAllMemoryFacts(50, userId);
     res.status(HTTP_STATUS.OK).json({
       status: 'ok',
       data: facts,
@@ -28,12 +32,13 @@ router.get('/memory', async (req: Request, res: Response) => {
 
 /**
  * DELETE /api/v1/memory/:id
- * Deletes a memory fact by ID.
+ * Deletes a memory fact by ID for the authenticated user.
  */
 router.delete('/memory/:id', async (req: Request, res: Response) => {
   try {
+    const userId = (req as any).user?.userId;
     const { id } = req.params;
-    const success = await sqliteMemoryRepository.deleteMemoryFact(id as string);
+    const success = await sqliteMemoryRepository.deleteMemoryFact(id as string, userId);
     if (success) {
       res.status(HTTP_STATUS.OK).json({
         status: 'ok',
@@ -44,7 +49,7 @@ router.delete('/memory/:id', async (req: Request, res: Response) => {
         status: 'error',
         error: {
           code: 'MEMORY_NOT_FOUND',
-          message: `Memory with ID ${id} not found`,
+          message: `Memory with ID ${id} not found or unauthorized`,
         },
       });
     }
@@ -54,50 +59,6 @@ router.delete('/memory/:id', async (req: Request, res: Response) => {
       error: {
         code: 'MEMORY_DELETE_FAILED',
         message: 'Failed to delete memory fact',
-      },
-    });
-  }
-});
-
-/**
- * GET /api/v1/profile
- * Retrieves the user profile.
- */
-router.get('/profile', async (req: Request, res: Response) => {
-  try {
-    const profile = await sqliteMemoryRepository.getUserProfile();
-    res.status(HTTP_STATUS.OK).json({
-      status: 'ok',
-      data: profile || { name: 'User', bio: '', college: '', occupation: '', age: 0 },
-    });
-  } catch (error) {
-    res.status(HTTP_STATUS.INTERNAL_SERVER_ERROR).json({
-      status: 'error',
-      error: {
-        code: 'PROFILE_FETCH_FAILED',
-        message: 'Failed to retrieve profile',
-      },
-    });
-  }
-});
-
-/**
- * PUT /api/v1/profile
- * Updates the user profile.
- */
-router.put('/profile', async (req: Request, res: Response) => {
-  try {
-    const profile = await sqliteMemoryRepository.updateUserProfile(req.body);
-    res.status(HTTP_STATUS.OK).json({
-      status: 'ok',
-      data: profile,
-    });
-  } catch (error) {
-    res.status(HTTP_STATUS.INTERNAL_SERVER_ERROR).json({
-      status: 'error',
-      error: {
-        code: 'PROFILE_UPDATE_FAILED',
-        message: 'Failed to update profile',
       },
     });
   }

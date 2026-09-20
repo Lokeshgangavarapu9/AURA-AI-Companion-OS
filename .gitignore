@@ -32,3 +32,8 @@ coverage/
 # OS metadata
 .DS_Store
 Thumbs.db
+
+# Databases & Backups
+*.db
+*.db-journal
+*.backup

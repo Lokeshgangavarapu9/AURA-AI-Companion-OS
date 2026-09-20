@@ -2,6 +2,7 @@
  * AURA Conversation Intelligence Engine — Session Manager
  * Executes session business logic (session creation, resumption, message appending, thread loading).
  * Strictly decoupled: Contains ZERO LLM calls, ZERO PromptBuilder calls, and ZERO Memory Engine calls.
+ * Fully supports multi-tenant user isolation.
  */
 
 import { ISessionRepository } from './session.repository.js';
@@ -22,25 +23,25 @@ export class SessionManager {
   }
 
   /**
-   * Lists all active and saved ConversationSessions.
+   * Lists all active and saved ConversationSessions, optionally scoped to a user.
    */
-  public async listSessions(): Promise<SessionMetadata[]> {
-    return this.repository.listSessions();
+  public async listSessions(userId?: string): Promise<SessionMetadata[]> {
+    return this.repository.listSessions(userId);
   }
 
   /**
    * Retrieves session metadata by ID.
    */
-  public async getSession(sessionId: string): Promise<SessionMetadata | null> {
-    return this.repository.getSessionById(sessionId);
+  public async getSession(sessionId: string, userId?: string): Promise<SessionMetadata | null> {
+    return this.repository.getSessionById(sessionId, userId);
   }
 
   /**
    * Creates a new ConversationSession record.
    */
-  public async createSession(dto?: CreateSessionDto): Promise<SessionMetadata> {
-    const session = await this.repository.createSession(dto);
-    logger.info({ sessionId: session.id, title: session.title }, '✅ SessionManager: Created new session');
+  public async createSession(dto?: CreateSessionDto, userId?: string): Promise<SessionMetadata> {
+    const session = await this.repository.createSession(dto, userId);
+    logger.info({ sessionId: session.id, title: session.title, userId: session.userId }, '✅ SessionManager: Created new session');
     return session;
   }
 
@@ -48,31 +49,31 @@ export class SessionManager {
    * Resumes an existing ConversationSession by ID.
    * If session does not exist, creates a new one gracefully.
    */
-  public async resumeSession(sessionId: string): Promise<SessionMetadata> {
-    const existing = await this.repository.getSessionById(sessionId);
+  public async resumeSession(sessionId: string, userId?: string): Promise<SessionMetadata> {
+    const existing = await this.repository.getSessionById(sessionId, userId);
 
     if (existing) {
       // Touch lastInteractionAt timestamp
       const updated = await this.repository.updateSession(sessionId, {
         lastInteractionAt: new Date(),
-      });
-      logger.info({ sessionId: updated.id }, '✅ SessionManager: Resumed active session');
+      }, userId);
+      logger.info({ sessionId: updated.id, userId }, '✅ SessionManager: Resumed active session');
       return updated;
     }
 
-    logger.warn({ sessionId }, '⚠️ SessionManager: Requested session not found — creating new session fallback');
-    return this.createSession({ title: 'Resumed Conversation' });
+    logger.warn({ sessionId, userId }, '⚠️ SessionManager: Requested session not found — creating new session fallback');
+    return this.createSession({ title: 'Resumed Conversation' }, userId);
   }
 
   /**
    * Ends and deletes a ConversationSession.
    */
-  public async endSession(sessionId: string): Promise<boolean> {
-    const deleted = await this.repository.deleteSession(sessionId);
+  public async endSession(sessionId: string, userId?: string): Promise<boolean> {
+    const deleted = await this.repository.deleteSession(sessionId, userId);
     if (deleted) {
-      logger.info({ sessionId }, '✅ SessionManager: Ended and deleted session');
+      logger.info({ sessionId, userId }, '✅ SessionManager: Ended and deleted session');
     } else {
-      logger.warn({ sessionId }, '⚠️ SessionManager: Failed to end session — session not found');
+      logger.warn({ sessionId, userId }, '⚠️ SessionManager: Failed to end session — session not found');
     }
     return deleted;
   }
@@ -96,8 +97,8 @@ export class SessionManager {
   /**
    * Updates metadata on an existing session.
    */
-  public async updateSession(sessionId: string, data: Partial<SessionMetadata>): Promise<SessionMetadata> {
-    return this.repository.updateSession(sessionId, data);
+  public async updateSession(sessionId: string, data: Partial<SessionMetadata>, userId?: string): Promise<SessionMetadata> {
+    return this.repository.updateSession(sessionId, data, userId);
   }
 
   /**

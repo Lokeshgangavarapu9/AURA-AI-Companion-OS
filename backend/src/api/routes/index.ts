@@ -5,10 +5,12 @@ import { sessionRouter } from './session.routes.js';
 import memoryRoutes from './memory.routes.js';
 import settingsRoutes from './settings.routes.js';
 import profileRoutes from './profile.routes.js';
+import authRoutes from './auth.routes.js';
 
 const apiRouter = Router();
 
 // Mount API v1 routes
+apiRouter.use('/auth', authRoutes);
 apiRouter.use('/', healthRoutes);
 apiRouter.use('/', chatRoutes);
 apiRouter.use('/sessions', sessionRouter);

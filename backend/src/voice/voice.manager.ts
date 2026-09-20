@@ -34,10 +34,12 @@ export interface ProcessVoiceTurnInput {
   transcriptionText?: string;
   voiceSessionId?: string;
   conversationSessionId?: string;
+  userId?: string;
 }
 
 export interface VoiceTurnResult {
   sessionId: string;
+  conversationSessionId: string;
   userTranscription: string;
   aiResponseText: string;
   aiAudio?: TTSResult;
@@ -175,6 +177,7 @@ export class VoiceManager extends EventEmitter {
       const convResult = await this.convManager.processConversation({
         userMessage: sttResult.text,
         sessionId: session.conversationSessionId || input.conversationSessionId,
+        userId: input.userId,
       });
 
       // Update voice session conversation reference
@@ -184,12 +187,17 @@ export class VoiceManager extends EventEmitter {
       stateMachine.transitionTo(VoiceState.SPEAKING, 'Synthesizing response text to speech');
 
       // 8. TextToSpeech Synthesis
-      const ttsResult = await this.ttsProvider.synthesize(convResult.aiResponse.text, this.config);
+      let ttsResult: TTSResult | undefined;
+      try {
+        ttsResult = await this.ttsProvider.synthesize(convResult.aiResponse.text, this.config);
+      } catch (err) {
+        logger.error({ err, voiceSessionId: session.sessionId }, 'Voice synthesis failed; continuing with text-only response');
+      }
 
       // Update session metrics
       session.metrics.turnsCount += 1;
       if (sttResult.durationMs) session.metrics.inputAudioDurationMs += sttResult.durationMs;
-      session.metrics.outputAudioDurationMs += ttsResult.durationMs;
+      if (ttsResult) session.metrics.outputAudioDurationMs += ttsResult.durationMs;
 
       // 9. State Transition: SPEAKING -> COMPLETED
       stateMachine.transitionTo(VoiceState.COMPLETED, 'Voice turn execution completed successfully');
@@ -212,6 +220,7 @@ export class VoiceManager extends EventEmitter {
 
       return {
         sessionId: session.sessionId,
+        conversationSessionId: convResult.sessionId,
         userTranscription: sttResult.text,
         aiResponseText: convResult.aiResponse.text,
         aiAudio: ttsResult,

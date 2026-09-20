@@ -2,16 +2,17 @@
  * AURA Core Runtime Layer — Context Assembly Pipeline
  * Assembles multi-domain context into a single immutable RuntimeContext object
  * while enforcing dynamic P0–P8 token budgeting floating.
+ * Scoped per authenticated user.
  */
 
 import {
   RuntimeContext,
-  ContextLayerPriority,
   RuntimeOrchestratorInput,
 } from '../types/runtime.types.js';
 import { memoryEngine } from '../../memory/engine/memory.engine.js';
 import { emotionAnalyzer } from '../../emotion/index.js';
 import { relationshipAnalyzer } from '../../relationship/index.js';
+import { relationshipRepository } from '../../relationship/storage/relationship.repository.js';
 import { sqliteMemoryRepository } from '../../memory/storage/sqlite.repository.js';
 import { providerManager } from '../../ai/providers/index.js';
 import { prisma } from '../../database/client.js';
@@ -31,31 +32,42 @@ export class ContextAssemblyPipeline {
     sessionId: string
   ): Promise<RuntimeContext> {
     const startTime = Date.now();
+    const userId = input.userId;
 
     // 1. Gather Emotion Context
     const emotionalContext =
       input.emotionalContext || emotionAnalyzer.analyze(input.userMessage);
 
-    // 2. Gather Relationship Context
-    const relResult = relationshipAnalyzer.analyze({
-      userId: sessionId,
-      userMessage: input.userMessage,
-      emotionalContext,
-    });
-    const relationshipContext = input.relationshipContext || relResult.context;
+    // 2. Gather Relationship Context from persistent storage
+    let relationshipContext = input.relationshipContext;
+    if (!relationshipContext) {
+      const targetUserId = userId || sessionId;
+      const currentRelState = await relationshipRepository.getRelationshipState(targetUserId);
+      const relResult = relationshipAnalyzer.analyze({
+        userId: targetUserId,
+        userMessage: input.userMessage,
+        currentState: currentRelState,
+        emotionalContext,
+      });
+      relationshipContext = relResult.context;
+      // Asynchronously persist updated relationship state
+      relationshipRepository.saveRelationshipState(targetUserId, relResult.updatedState);
+    }
 
-    // 3. Gather Working Memory
-    const workingMemory = await memoryEngine.getWorkingMemory(input.userMessage);
+    // 3. Gather Working Memory for this user
+    const workingMemory = await memoryEngine.getWorkingMemory(input.userMessage, userId);
 
-    // 4. Gather Profile
-    const userProfile = await sqliteMemoryRepository.getUserProfile();
+    // 4. Gather Profile for this user
+    const userProfile = await sqliteMemoryRepository.getUserProfile(userId);
 
-    // 5. Gather Settings
+    // 5. Gather Settings for this user
     let settingsObj: Record<string, unknown> = {};
     try {
-      const dbSettings = await prisma.settings.findUnique({ where: { id: 'default' } });
-      if (dbSettings) {
-        settingsObj = dbSettings as unknown as Record<string, unknown>;
+      if (userId) {
+        const dbSettings = await prisma.settings.findUnique({ where: { userId } });
+        if (dbSettings) {
+          settingsObj = dbSettings as unknown as Record<string, unknown>;
+        }
       }
     } catch {
       // Fallback
@@ -78,6 +90,7 @@ export class ContextAssemblyPipeline {
       id: `ctx-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
       createdAt: new Date(),
       sessionId,
+      userId,
       userMessage: input.userMessage,
 
       emotionalContext,
@@ -99,6 +112,7 @@ export class ContextAssemblyPipeline {
     logger.debug(
       {
         contextId: runtimeContext.id,
+        userId,
         allocatedTokens: tokenBudget.allocatedTokens,
         assemblyTimeMs: Date.now() - startTime,
       },

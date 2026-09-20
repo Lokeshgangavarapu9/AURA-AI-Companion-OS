@@ -3,13 +3,15 @@
  * Master orchestrator executing non-blocking background feedback loops:
  * Memory deduplication, Relationship metric updates, Emotion trend tracking,
  * Learning Evolution, and Telemetry analytics.
+ * Fully user-isolated.
  */
 
 import { RuntimeEventBus, runtimeEventBus } from './event.bus.js';
 import { AnalyticsTracker, analyticsTracker } from './analytics.tracker.js';
-import { RuntimeContext, RuntimeOrchestratorOutput } from '../types/runtime.types.js';
+import { RuntimeOrchestratorOutput } from '../types/runtime.types.js';
 import { memoryEngine } from '../../memory/engine/memory.engine.js';
 import { relationshipAnalyzer } from '../../relationship/index.js';
+import { relationshipRepository } from '../../relationship/storage/relationship.repository.js';
 import { logger } from '../../utils/logger.js';
 
 export class PostProcessingEngine {
@@ -31,7 +33,8 @@ export class PostProcessingEngine {
   public processTurnAsync(output: RuntimeOrchestratorOutput): void {
     setImmediate(async () => {
       try {
-        logger.debug({ sessionId: output.sessionId }, '🔄 PostProcessingEngine: Starting background post-processing turn...');
+        const targetUserId = output.userId || output.sessionId;
+        logger.debug({ sessionId: output.sessionId, userId: targetUserId }, '🔄 PostProcessingEngine: Starting background post-processing turn...');
 
         // 1. Record Analytics & Telemetry
         this.analytics.recordTurnMetric({
@@ -44,21 +47,27 @@ export class PostProcessingEngine {
           timestamp: new Date(),
         });
 
-        // 2. Memory Feedback Loop: Background memory extraction
+        // 2. Memory Feedback Loop: Background user-scoped memory extraction
         memoryEngine.processMessageAsync(
           output.runtimeContext.userMessage,
-          output.responseText
+          output.responseText,
+          output.userId
         );
         this.eventBus.publish('MemoryStored', output.sessionId, {
           userMessage: output.runtimeContext.userMessage,
+          userId: output.userId,
         });
 
-        // 3. Relationship Feedback Loop: Update relationship metrics
+        // 3. Relationship Feedback Loop: Update & persist user relationship metrics
+        const currentRel = await relationshipRepository.getRelationshipState(targetUserId);
         const updatedRel = relationshipAnalyzer.analyze({
-          userId: output.sessionId,
+          userId: targetUserId,
           userMessage: output.runtimeContext.userMessage,
+          currentState: currentRel,
           emotionalContext: output.runtimeContext.emotionalContext,
         });
+        await relationshipRepository.saveRelationshipState(targetUserId, updatedRel.updatedState);
+
         this.eventBus.publish('RelationshipUpdated', output.sessionId, updatedRel.context.metrics);
 
         // 4. Emotion Feedback Loop: Track emotion trends
@@ -78,7 +87,7 @@ export class PostProcessingEngine {
           providerUsed: output.providerUsed,
         });
 
-        logger.debug({ sessionId: output.sessionId }, '✅ PostProcessingEngine: Background pipeline completed successfully');
+        logger.debug({ sessionId: output.sessionId, userId: targetUserId }, '✅ PostProcessingEngine: Background pipeline completed successfully');
       } catch (err: unknown) {
         logger.error({ err, sessionId: output.sessionId }, '⚠️ PostProcessingEngine: Non-blocking background error');
       }

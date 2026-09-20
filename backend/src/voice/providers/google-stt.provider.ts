@@ -1,15 +1,6 @@
-/**
- * AURA Voice Foundation — Google Speech-to-Text Provider (Production Adapter)
- * Real streaming recognition, partial & final transcripts, auto-punctuation,
- * confidence score filtering, and automatic error recovery.
- */
-
-import {
-  ISpeechToTextProvider,
-  STTResult,
-  VoiceConfig,
-  IVoiceInputStream,
-} from '../types/voice.types.js';
+/** Google Cloud Speech-to-Text adapter. Requires Application Default Credentials. */
+import { SpeechClient } from '@google-cloud/speech';
+import { ISpeechToTextProvider, STTResult, VoiceConfig, IVoiceInputStream } from '../types/voice.types.js';
 import { VoiceInputStream } from '../stream/voice.stream.js';
 import { logger } from '../../utils/logger.js';
 
@@ -17,98 +8,76 @@ export class GoogleSpeechToTextProvider implements ISpeechToTextProvider {
   public readonly providerId = 'google-stt';
   public readonly name = 'Google Cloud Speech-to-Text Engine';
   private config?: VoiceConfig;
-  private isInitialized = false;
+  private client?: SpeechClient;
 
   public async initialize(config: VoiceConfig): Promise<void> {
     this.config = config;
-    this.isInitialized = true;
-    logger.info({ providerId: this.providerId, config }, '🎙️ GoogleSpeechToTextProvider initialized');
+    this.client ??= new SpeechClient();
+    logger.info({ providerId: this.providerId, language: config.language }, 'Google Speech-to-Text adapter initialized');
   }
 
   public async transcribe(audio: Uint8Array, overrideConfig?: Partial<VoiceConfig>): Promise<STTResult> {
-    if (!this.isInitialized) {
-      await this.initialize(overrideConfig as VoiceConfig || {} as any);
-    }
-
-    const cfg = { ...this.config, ...overrideConfig };
-    const language = cfg.language || 'en-US';
-    const minConfidence = cfg.confidenceThreshold ?? 0.7;
-
+    if (audio.length === 0) throw new Error('Google Speech-to-Text received an empty audio payload');
+    if (!this.client) await this.initialize(overrideConfig as VoiceConfig);
+    const cfg = { ...this.config, ...overrideConfig } as VoiceConfig;
+    const startedAt = Date.now();
     try {
-      // In production environment with Google Speech credentials, this connects via @google-cloud/speech client.
-      // Fallback/Simulated high-confidence recognition for local environment without GCP credentials.
-      const recognizedText = audio.length > 0
-        ? 'Hello Shizuka, can you help me plan my schedule for today?'
-        : 'Hello AURA.';
-
-      const confidence = 0.95;
-
-      if (confidence < minConfidence) {
-        logger.warn({ confidence, minConfidence }, '⚠️ GoogleSTT: Recognition confidence below threshold');
-      }
-
-      return {
-        text: recognizedText,
-        isFinal: true,
-        confidence,
-        language,
-        durationMs: Math.max(800, audio.length * 2),
-        audioFeatures: {
-          pitchMean: 215,
-          intensityMean: 68,
-          speakingRate: 3.4,
-        },
-      };
+      const [response] = await this.client!.recognize({
+        audio: { content: Buffer.from(audio).toString('base64') },
+        config: this.recognitionConfig(cfg, this.detectEncoding(audio)),
+      } as any);
+      const alternatives = (response.results ?? []).map((result: any) => result.alternatives?.[0]).filter(Boolean);
+      const text = alternatives.map((alternative: any) => alternative.transcript?.trim()).filter(Boolean).join(' ');
+      if (!text) throw new Error('No speech was recognized in the submitted audio');
+      const confidences = alternatives.map((alternative: any) => Number(alternative.confidence ?? 0)).filter((value: number) => value > 0);
+      const confidence = confidences.length ? confidences.reduce((sum: number, value: number) => sum + value, 0) / confidences.length : 0;
+      if (confidence && confidence < (cfg.confidenceThreshold ?? 0.7)) logger.warn({ confidence, threshold: cfg.confidenceThreshold }, 'Google STT returned low-confidence transcription');
+      return { text, isFinal: true, confidence, language: cfg.language, durationMs: Date.now() - startedAt };
     } catch (err: any) {
-      logger.error({ err }, '❌ GoogleSTT: Error during transcription');
+      logger.error({ err }, 'Google Speech-to-Text request failed');
       throw new Error(`Google Speech-to-Text Error: ${err.message || 'Recognition failed'}`);
     }
   }
 
-  public async createStream(overrideConfig?: Partial<VoiceConfig>): Promise<{
-    inputStream: IVoiceInputStream;
-    onTranscription: (handler: (result: STTResult) => void) => void;
-  }> {
+  public async createStream(overrideConfig?: Partial<VoiceConfig>): Promise<{ inputStream: IVoiceInputStream; onTranscription: (handler: (result: STTResult) => void) => void }> {
+    if (!this.client) await this.initialize(overrideConfig as VoiceConfig);
+    const cfg = { ...this.config, ...overrideConfig } as VoiceConfig;
     const inputStream = new VoiceInputStream();
     const handlers: Array<(result: STTResult) => void> = [];
-    const cfg = { ...this.config, ...overrideConfig };
-
-    let accumulatedLength = 0;
-
-    inputStream.onData((chunk) => {
-      accumulatedLength += chunk.length;
-
-      // Partial interim transcript event
-      if (cfg.interimResults) {
-        handlers.forEach((h) =>
-          h({
-            text: 'Listening to user voice...',
-            isFinal: false,
-            confidence: 0.85,
-          })
-        );
+    const recognizeStream = this.client!.streamingRecognize({ config: this.recognitionConfig(cfg, 'LINEAR16'), interimResults: cfg.interimResults ?? true } as any);
+    recognizeStream.on('data', (response: any) => {
+      for (const result of response.results ?? []) {
+        const alternative = result.alternatives?.[0];
+        const text = alternative?.transcript?.trim();
+        if (text) handlers.forEach((handler) => handler({ text, isFinal: Boolean(result.isFinal), confidence: Number(alternative.confidence ?? 0), language: cfg.language }));
       }
     });
-
-    inputStream.onEnd(() => {
-      // Final transcript event with punctuation
-      handlers.forEach((h) =>
-        h({
-          text: 'Hello Shizuka, I am speaking with you now.',
-          isFinal: true,
-          confidence: 0.98,
-          language: cfg.language || 'en-US',
-        })
-      );
-    });
-
-    return {
-      inputStream,
-      onTranscription: (handler) => handlers.push(handler),
-    };
+    recognizeStream.on('error', (err: Error) => inputStream.emit('error', err));
+    inputStream.onData((chunk) => recognizeStream.write(Buffer.from(chunk)));
+    inputStream.onEnd(() => recognizeStream.end());
+    return { inputStream, onTranscription: (handler) => handlers.push(handler) };
   }
 
   public async checkHealth(): Promise<boolean> {
-    return this.isInitialized;
+    try {
+      if (!this.client) await this.initialize(this.config as VoiceConfig);
+      await this.client!.getProjectId();
+      return true;
+    } catch (err) {
+      logger.warn({ err }, 'Google STT credentials are unavailable');
+      return false;
+    }
+  }
+
+  private recognitionConfig(cfg: VoiceConfig, encoding: string) {
+    return { encoding, sampleRateHertz: cfg.audioConfig?.sampleRate || cfg.sampleRate, audioChannelCount: cfg.audioConfig?.channels || 1, languageCode: cfg.language || 'en-US', enableAutomaticPunctuation: cfg.autoPunctuation ?? true, model: 'latest_short' };
+  }
+
+  private detectEncoding(audio: Uint8Array): 'WEBM_OPUS' | 'OGG_OPUS' | 'LINEAR16' | 'FLAC' {
+    const header = Buffer.from(audio.subarray(0, 12)).toString('ascii');
+    if (header.startsWith('OggS')) return 'OGG_OPUS';
+    if (header.includes('webm') || (audio[0] === 0x1a && audio[1] === 0x45 && audio[2] === 0xdf && audio[3] === 0xa3)) return 'WEBM_OPUS';
+    if (header.startsWith('fLaC')) return 'FLAC';
+    return 'LINEAR16';
   }
 }

@@ -2,6 +2,7 @@
  * AURA Memory Engine — Memory Retrieval Engine
  * Fetches candidate memories from storage, scores & ranks them via MemoryRanker,
  * enforces a strict token budget (~1000 tokens / max 10 memories), and builds a WorkingMemory payload.
+ * Fully scopes retrieval to the authenticated user.
  */
 
 import { IMemoryRepository } from '../storage/memory.repository.js';
@@ -27,18 +28,19 @@ export class MemoryRetriever {
   }
 
   /**
-   * Builds WorkingMemory context for a given user prompt message
+   * Builds WorkingMemory context for a given user prompt message and optional userId
    * @param userMessage Active user prompt
+   * @param userId Target user ID for tenant isolation
    */
-  public async getWorkingMemory(userMessage: string): Promise<WorkingMemory> {
+  public async getWorkingMemory(userMessage: string, userId?: string): Promise<WorkingMemory> {
     try {
       const keywords = this.extractKeywords(userMessage);
 
       // 1. Fetch User Profile
-      const profile = await this.repository.getUserProfile();
+      const profile = await this.repository.getUserProfile(userId);
 
-      // 2. Fetch candidate memory facts from repository
-      const candidateFacts = await this.repository.getAllMemoryFacts(50);
+      // 2. Fetch candidate memory facts from repository for this user
+      const candidateFacts = await this.repository.getAllMemoryFacts(50, userId);
 
       // 3. Rank memories using MemoryRanker (Top 10 max)
       const scoredItems = MemoryRanker.rankMemories(candidateFacts, keywords, {
@@ -72,7 +74,7 @@ export class MemoryRetriever {
       }
 
       // 5. Fetch recent reflections
-      const recentReflections = await this.repository.getRecentReflections(3);
+      const recentReflections = await this.repository.getRecentReflections(3, userId);
 
       // 6. Estimate token count & enforce budget
       const workingMemory: WorkingMemory = {
@@ -89,6 +91,7 @@ export class MemoryRetriever {
 
       logger.debug(
         {
+          userId,
           topFactsCount: topFacts.length,
           tokensEst: workingMemory.totalTokensEstimate,
         },
@@ -97,7 +100,7 @@ export class MemoryRetriever {
 
       return workingMemory;
     } catch (err) {
-      logger.error({ err }, '❌ MemoryRetriever failed to construct WorkingMemory — returning empty fallback');
+      logger.error({ err, userId }, '❌ MemoryRetriever failed to construct WorkingMemory — returning empty fallback');
       return {
         profile: null,
         facts: [],

@@ -23,6 +23,7 @@ import {
   RelationshipAnalyzer,
   RelationshipState,
   RelationshipLevel,
+  relationshipRepository,
 } from '../../relationship/index.js';
 import { ConversationResult, ConversationStateEnum } from '../types/index.js';
 import { logger } from '../../utils/logger.js';
@@ -30,6 +31,7 @@ import { logger } from '../../utils/logger.js';
 export interface ProcessConversationInput {
   userMessage: string;
   sessionId?: string;
+  userId?: string;
 }
 
 export interface ExtendedConversationResult extends ConversationResult {
@@ -64,7 +66,7 @@ export class ConversationManager {
 
   /**
    * Orchestrates a single conversation turn from input message to AI response.
-   * @param input User prompt and optional active sessionId
+   * @param input User prompt and optional active sessionId and userId
    */
   public async processConversation(input: ProcessConversationInput): Promise<ExtendedConversationResult> {
     const startTime = Date.now();
@@ -82,20 +84,23 @@ export class ConversationManager {
 
       // 2. Resume or create active session to get true sessionId
       let session = input.sessionId
-        ? await this.sessionManager.resumeSession(input.sessionId)
-        : await this.sessionManager.createSession({ title: 'AURA Conversation' });
+        ? await this.sessionManager.resumeSession(input.sessionId, input.userId)
+        : await this.sessionManager.createSession({ title: 'AURA Conversation' }, input.userId);
+
+      const targetUserId = session.userId || input.userId || session.id;
 
       // 3. Analyze Relationship & Get RelationshipContext (v1)
-      const currentRelState = this.sessionRelationshipStates.get(session.id);
+      const currentRelState = await relationshipRepository.getRelationshipState(targetUserId);
       const relResult = this.relationshipAnalyzer.analyze({
-        userId: session.id,
+        userId: targetUserId,
         userMessage: input.userMessage,
         currentState: currentRelState,
         emotionalContext,
       });
 
-      // Update in-memory session relationship state
+      // Update in-memory & persistent relationship state
       this.sessionRelationshipStates.set(session.id, relResult.updatedState);
+      await relationshipRepository.saveRelationshipState(targetUserId, relResult.updatedState);
 
       // 4. State Transition: IDLE -> LISTENING
       stateMachine.transitionTo('LISTENING');
@@ -110,7 +115,7 @@ export class ConversationManager {
         );
         session = await this.sessionManager.updateSession(session.id, {
           currentTopic: topicResult.currentTopic,
-        });
+        }, input.userId);
       }
 
       // 6. Append User Message to Session Thread
@@ -135,6 +140,7 @@ export class ConversationManager {
       const runtimeResult = await runtimeOrchestrator.executeTurn({
         userMessage: input.userMessage,
         sessionId: session.id,
+        userId: targetUserId,
         emotionalContext,
         relationshipContext: relResult.context,
         cognitivePlan,

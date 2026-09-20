@@ -1,10 +1,12 @@
 /**
  * AURA Voice Bridge — VoiceGateway (WebSocket Transport)
  * Connects browser WebSocket audio capture stream directly into VoiceManager.
+ * Authenticates client WebSocket connections and maps voice sessions to users.
  */
 
 import { WebSocketServer, WebSocket } from 'ws';
-import { Server as HttpServer } from 'http';
+import { Server as HttpServer, IncomingMessage } from 'http';
+import { URL } from 'url';
 import { voiceManager, VoiceManager } from './voice.manager.js';
 import { voiceSessionManager, VoiceSessionManager } from './session/voice.session-manager.js';
 import {
@@ -16,15 +18,26 @@ import {
 } from './protocol/audio.protocol.js';
 import { VoiceInputStream } from './stream/voice.stream.js';
 import { VoiceState } from './types/voice.types.js';
+import { TokenService } from '../auth/token.service.js';
 import { logger } from '../utils/logger.js';
+
+interface ActiveSocketState {
+  stream: VoiceInputStream;
+  sessionId: string;
+  userId?: string;
+  chunks: Buffer[];
+  byteLength: number;
+  processing: boolean;
+}
 
 export class VoiceGateway {
   private wss?: WebSocketServer;
   private voiceMgr: VoiceManager;
   private sessionMgr: VoiceSessionManager;
-  
+
   // Track active socket streams
-  private socketInputStreams: Map<WebSocket, { stream: VoiceInputStream; sessionId: string }> = new Map();
+  private socketInputStreams: Map<WebSocket, ActiveSocketState> = new Map();
+  private readonly maxTurnBytes = 10 * 1024 * 1024;
 
   constructor(vMgr: VoiceManager = voiceManager, sMgr: VoiceSessionManager = voiceSessionManager) {
     this.voiceMgr = vMgr;
@@ -34,13 +47,27 @@ export class VoiceGateway {
   public initialize(server: HttpServer, path: string = '/ws/voice'): WebSocketServer {
     this.wss = new WebSocketServer({ server, path });
 
-    this.wss.on('connection', (ws: WebSocket) => {
-      logger.info('🎙️ VoiceGateway: New WebSocket client connected');
+    this.wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {
+      // Extract authentication token if present in query parameters (?token=...)
+      let authenticatedUserId: string | undefined;
+      try {
+        const parsedUrl = new URL(req.url || '', `http://${req.headers.host || 'localhost'}`);
+        const token = parsedUrl.searchParams.get('token');
+        if (token) {
+          const claims = TokenService.verifyAccessToken(token);
+          authenticatedUserId = claims.userId;
+          logger.info({ userId: authenticatedUserId }, '🎙️ VoiceGateway: Authenticated WebSocket client connected');
+        } else {
+          logger.info('🎙️ VoiceGateway: Anonymous WebSocket client connected');
+        }
+      } catch (tokenErr) {
+        logger.warn({ err: tokenErr }, '⚠️ VoiceGateway: Invalid token in WebSocket handshake');
+      }
 
       ws.on('message', async (data: Buffer | string) => {
         try {
           const msg: ClientAudioMessage = JSON.parse(data.toString());
-          await this.handleClientMessage(ws, msg);
+          await this.handleClientMessage(ws, msg, authenticatedUserId);
         } catch (err: any) {
           logger.error({ err }, '❌ VoiceGateway: Error parsing WS message');
           this.sendErrorMessage(ws, err.message || 'Invalid JSON message');
@@ -62,7 +89,7 @@ export class VoiceGateway {
     return this.wss;
   }
 
-  private async handleClientMessage(ws: WebSocket, msg: ClientAudioMessage): Promise<void> {
+  private async handleClientMessage(ws: WebSocket, msg: ClientAudioMessage, defaultUserId?: string): Promise<void> {
     switch (msg.type) {
       case AudioFrameType.START_SESSION: {
         const sessionInfo = this.sessionMgr.startSession({
@@ -70,17 +97,24 @@ export class VoiceGateway {
         });
 
         const inputStream = new VoiceInputStream(`ws-in-${sessionInfo.sessionId}`);
-        this.socketInputStreams.set(ws, { stream: inputStream, sessionId: sessionInfo.sessionId });
+        this.socketInputStreams.set(ws, {
+          stream: inputStream,
+          sessionId: sessionInfo.sessionId,
+          userId: defaultUserId,
+          chunks: [],
+          byteLength: 0,
+          processing: false,
+        });
 
-        // Listen for Voice State changes to send to client matching LiveVoiceSyncManager expectations
+        // Listen for Voice State changes to send to client
         const sm = this.sessionMgr.getStateMachine(sessionInfo.sessionId);
         if (sm) {
           sm.on('stateChanged', ({ currentState }: { currentState: VoiceState }) => {
             if (ws.readyState === WebSocket.OPEN) {
-              const stateMsg = {
-                type: 'VOICE_STATE_CHANGED',
+              const stateMsg: ServerStateChangedMessage = {
+                type: AudioFrameType.STATE_CHANGED,
                 sessionId: sessionInfo.sessionId,
-                state: currentState,
+                voiceState: currentState,
               };
               ws.send(JSON.stringify(stateMsg));
             }
@@ -105,7 +139,21 @@ export class VoiceGateway {
         }
 
         const buffer = Buffer.from(chunkMsg.audioBase64, 'base64');
+        if (buffer.length === 0 || active.byteLength + buffer.length > this.maxTurnBytes) {
+          this.sendErrorMessage(ws, 'Audio turn is empty or exceeds the 10 MB limit');
+          return;
+        }
         active.stream.pushChunk(new Uint8Array(buffer));
+        active.chunks.push(buffer);
+        active.byteLength += buffer.length;
+        break;
+      }
+
+      case AudioFrameType.TRANSCRIPTION: {
+        const active = this.socketInputStreams.get(ws);
+        const transcript = msg as any;
+        if (!active || !transcript.isFinal || typeof transcript.text !== 'string' || !transcript.text.trim()) return;
+        await this.completeTurn(ws, active, transcript.text.trim());
         break;
       }
 
@@ -113,57 +161,8 @@ export class VoiceGateway {
         const active = this.socketInputStreams.get(ws);
         if (!active) return;
 
-        active.stream.finish();
-
-        // Trigger VoiceManager turn with streaming or accumulated buffers
-        const dummyAudio = new Uint8Array([0x01, 0x02, 0x03]); // Received audio payload bridge
-        const result = await this.voiceMgr.processVoiceTurn({
-          audioChunk: dummyAudio,
-          voiceSessionId: active.sessionId,
-          conversationSessionId: msg.conversationSessionId,
-        });
-
-        // Send response back via WebSocket matching frontend protocol
-        if (ws.readyState === WebSocket.OPEN) {
-          ws.send(
-            JSON.stringify({
-              type: 'TRANSCRIPTION',
-              sessionId: active.sessionId,
-              text: result.userTranscription,
-              isFinal: true,
-            })
-          );
-
-          ws.send(
-            JSON.stringify({
-              type: 'AI_RESPONSE_TEXT',
-              sessionId: active.sessionId,
-              text: result.aiResponseText,
-            })
-          );
-
-          if (result.aiAudio?.audioChunk) {
-            const aiAudioMsg: ServerAiAudioChunkMessage = {
-              type: AudioFrameType.AI_AUDIO_CHUNK,
-              sessionId: active.sessionId,
-              audioBase64: Buffer.from(result.aiAudio.audioChunk).toString('base64'),
-              sampleRate: result.aiAudio.sampleRate,
-            };
-            ws.send(JSON.stringify(aiAudioMsg));
-          }
-
-          ws.send(
-            JSON.stringify({
-              type: AudioFrameType.AI_AUDIO_END,
-              sessionId: active.sessionId,
-              text: result.aiResponseText,
-            })
-          );
-        }
-
-        // Re-create input stream for next turn
-        const newStream = new VoiceInputStream(`ws-in-${active.sessionId}`);
-        this.socketInputStreams.set(ws, { stream: newStream, sessionId: active.sessionId });
+        if (active.byteLength === 0) return;
+        await this.completeTurn(ws, active);
         break;
       }
 
@@ -186,13 +185,50 @@ export class VoiceGateway {
     }
   }
 
-  private sendErrorMessage(ws: WebSocket, error: string): void {
+  private async completeTurn(ws: WebSocket, active: ActiveSocketState, transcriptionText?: string): Promise<void> {
+    if (active.processing) return;
+    active.processing = true;
+    active.stream.finish();
+    try {
+      const result = await this.voiceMgr.processVoiceTurn({
+        audioChunk: transcriptionText ? undefined : new Uint8Array(Buffer.concat(active.chunks)),
+        transcriptionText,
+        voiceSessionId: active.sessionId,
+        userId: active.userId,
+      });
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: AudioFrameType.TRANSCRIPTION, sessionId: active.sessionId, text: result.userTranscription, isFinal: true }));
+        ws.send(JSON.stringify({ type: 'AI_RESPONSE_TEXT', sessionId: active.sessionId, conversationSessionId: result.conversationSessionId, text: result.aiResponseText }));
+        if (result.aiAudio?.audioChunk) {
+          const aiAudioMsg: ServerAiAudioChunkMessage = { type: AudioFrameType.AI_AUDIO_CHUNK, sessionId: active.sessionId, audioBase64: Buffer.from(result.aiAudio.audioChunk).toString('base64'), sampleRate: result.aiAudio.sampleRate };
+          ws.send(JSON.stringify(aiAudioMsg));
+        }
+        ws.send(JSON.stringify({ type: AudioFrameType.AI_AUDIO_END, sessionId: active.sessionId, text: result.aiResponseText }));
+      }
+    } catch (err: any) {
+      logger.error({ err, sessionId: active.sessionId }, 'VoiceGateway: voice turn failed');
+      this.sendErrorMessage(ws, err.message || 'Voice turn failed');
+    } finally {
+      if (this.socketInputStreams.get(ws) === active) {
+        this.socketInputStreams.set(ws, {
+          stream: new VoiceInputStream(`ws-in-${active.sessionId}`),
+          sessionId: active.sessionId,
+          userId: active.userId,
+          chunks: [],
+          byteLength: 0,
+          processing: false,
+        });
+      }
+    }
+  }
+
+  private sendErrorMessage(ws: WebSocket, message: string): void {
     if (ws.readyState === WebSocket.OPEN) {
-      const errMsg: ServerErrorMessage = {
+      const errPayload: ServerErrorMessage = {
         type: AudioFrameType.ERROR,
-        error,
+        error: message,
       };
-      ws.send(JSON.stringify(errMsg));
+      ws.send(JSON.stringify(errPayload));
     }
   }
 
@@ -205,18 +241,11 @@ export class VoiceGateway {
     }
   }
 
-  public close(): Promise<void> {
-    return new Promise((resolve) => {
-      if (this.wss) {
-        this.wss.close(() => {
-          logger.info('🛑 VoiceGateway WebSocket server stopped');
-          resolve();
-        });
-      } else {
-        resolve();
-      }
-    });
+  public async close(): Promise<void> {
+    if (this.wss) {
+      await new Promise<void>((resolve) => {
+        this.wss!.close(() => resolve());
+      });
+    }
   }
 }
-
-export const voiceGateway = new VoiceGateway();

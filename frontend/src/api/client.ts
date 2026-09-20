@@ -154,3 +154,29 @@ export class HttpClient {
 
 // Export Singleton HttpClient Instance
 export const httpClient = new HttpClient();
+
+// Automatically attach Bearer token to all outgoing authenticated requests
+httpClient.addRequestInterceptor(async (opts) => {
+  if (typeof window !== 'undefined') {
+    const token = localStorage.getItem('aura_token');
+    if (token) {
+      opts.headers = {
+        ...opts.headers,
+        Authorization: `Bearer ${token}`,
+      };
+    }
+  }
+  return opts;
+});
+
+// Handle 401 Unauthorized gracefully by clearing invalid session token
+httpClient.addResponseInterceptor(async (result) => {
+  if (result.statusCode === 401 && typeof window !== 'undefined') {
+    const hadToken = !!localStorage.getItem('aura_token');
+    if (hadToken) {
+      localStorage.removeItem('aura_token');
+      window.dispatchEvent(new CustomEvent('aura:unauthorized'));
+    }
+  }
+  return result;
+});

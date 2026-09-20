@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   AIStatusMode,
   AIEmotion,
@@ -16,13 +16,18 @@ import {
 } from './types';
 import {
   PERSONALITY_MODES,
-  INITIAL_CHAT_MESSAGES,
   DEFAULT_SETTINGS,
   SAMPLE_CONVERSATION_HISTORY
 } from './utils/mockData';
 import { soundFx } from './utils/soundEffects';
 
-import { chatService, sessionService, settingsService } from './api/index.js';
+import {
+  chatService,
+  sessionService,
+  settingsService,
+  authService,
+  UserClaims
+} from './api/index.js';
 
 // Core Components
 import { AvatarViewer } from './components/AvatarViewer';
@@ -30,6 +35,7 @@ import { TopStatusBar, NavTab } from './components/TopStatusBar';
 import { FloatingControlsBar } from './components/FloatingControlsBar';
 import { CameraPreviewModal } from './components/CameraPreviewModal';
 import { MicrophoneModal } from './components/MicrophoneModal';
+import { AuthModal } from './components/AuthModal';
 
 // Dedicated Full Pages
 import { ProfilePage } from './components/pages/ProfilePage';
@@ -49,7 +55,12 @@ export default function App() {
   // Navigation Routing State
   const [activeTab, setActiveTab] = useState<NavTab>('home');
 
-  // Active Session State (Resets on browser refresh)
+  // Authentication State (Multi-tenant SaaS Identity)
+  const [user, setUser] = useState<UserClaims | null>(null);
+  const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
+  const [authModalMode, setAuthModalMode] = useState<'login' | 'register'>('login');
+
+  // Active Session State (Resets on browser refresh or restores via History)
   const [activeSession, setActiveSession] = useState<ConversationSessionState>({
     sessionId: null,
     title: 'AURA Conversation',
@@ -85,14 +96,61 @@ export default function App() {
 
   // Microphone stream modal toggle
   const [isMicModalOpen, setIsMicModalOpen] = useState(false);
-  const liveVoiceManagerRef = React.useRef<any>(null);
+  const liveVoiceManagerRef = useRef<any>(null);
 
-  // Time-of-day session greeting (Greets once per session)
-  const [sessionGreeting, setSessionGreeting] = useState<string | null>(() => {
+  // Helper for dynamic greeting based on time of day and authenticated user
+  const getGreetingText = (userName?: string) => {
     const hour = new Date().getHours();
     const salutation = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
-    return `${salutation}, Lokesh. It's wonderful to see you again. How can I accompany you today?`;
-  });
+    const displayName = userName ? userName.split(' ')[0] : 'friend';
+    return `${salutation}, ${displayName}. It's wonderful to see you again. How can I accompany you today?`;
+  };
+
+  // Time-of-day session greeting (Greets once per session)
+  const [sessionGreeting, setSessionGreeting] = useState<string | null>(() => getGreetingText());
+
+  // Restore authenticated session on mount and sync across tabs
+  useEffect(() => {
+    const restoreAuth = async () => {
+      if (authService.isAuthenticated()) {
+        const res = await authService.getMe();
+        if (res.success && res.data?.data?.user) {
+          const authUser = res.data.data.user;
+          setUser(authUser);
+          setSessionGreeting(getGreetingText(authUser.name));
+
+          // Reload user-scoped settings
+          const settingsRes = await settingsService.getSettings();
+          if (settingsRes.success && settingsRes.data) {
+            setSettings((settingsRes.data as any).data);
+          }
+        } else {
+          authService.clearToken();
+          setUser(null);
+        }
+      }
+    };
+
+    restoreAuth();
+
+    const handleUnauthorized = () => {
+      setUser(null);
+      setIsAuthModalOpen(true);
+      setAuthModalMode('login');
+    };
+
+    const handleAuthState = () => {
+      restoreAuth();
+    };
+
+    window.addEventListener('aura:unauthorized', handleUnauthorized);
+    window.addEventListener('aura:auth_state_changed', handleAuthState);
+
+    return () => {
+      window.removeEventListener('aura:unauthorized', handleUnauthorized);
+      window.removeEventListener('aura:auth_state_changed', handleAuthState);
+    };
+  }, []);
 
   // Auto-fade greeting banner after 6 seconds
   useEffect(() => {
@@ -102,10 +160,9 @@ export default function App() {
     }
   }, [sessionGreeting]);
 
-  // User Inactivity / Idle Auto-Hide State for Home Controls (3 seconds)
+  // User Inactivity / Idle Auto-Hide State for Home Controls
   const [isIdle, setIsIdle] = useState(false);
 
-  // Track Mouse Movement and Key Activity to Toggle Idle Mode on Home Page
   useEffect(() => {
     let timer: NodeJS.Timeout;
 
@@ -114,7 +171,7 @@ export default function App() {
       clearTimeout(timer);
       timer = setTimeout(() => {
         setIsIdle(true);
-      }, 8000); // 8 seconds of inactivity (was 3s — too aggressive, hid nav before user could interact)
+      }, 8000); // 8 seconds of inactivity
     };
 
     resetIdleTimer();
@@ -137,16 +194,51 @@ export default function App() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [historyList, setHistoryList] = useState<ConversationHistoryItem[]>(SAMPLE_CONVERSATION_HISTORY);
 
-  // Load settings on mount
+  // Sync Web Audio Synth enabled state with settings
   useEffect(() => {
-    const loadSettings = async () => {
-      const res = await settingsService.getSettings();
-      if (res.success && res.data) {
-        setSettings((res.data as any).data);
-      }
-    };
-    loadSettings();
-  }, []);
+    soundFx.setEnabled(settings.soundFxEnabled);
+  }, [settings.soundFxEnabled]);
+
+  const handleOpenAuth = (mode: 'login' | 'register' = 'login') => {
+    setAuthModalMode(mode);
+    setIsAuthModalOpen(true);
+  };
+
+  const handleAuthSuccess = async (authenticatedUser: UserClaims) => {
+    setUser(authenticatedUser);
+    setSessionGreeting(getGreetingText(authenticatedUser.name));
+
+    // Reset voice manager instance to reconnect with user JWT
+    if (liveVoiceManagerRef.current) {
+      liveVoiceManagerRef.current.stopDuplexSession();
+      liveVoiceManagerRef.current = null;
+    }
+
+    // Refresh scoped settings
+    const settingsRes = await settingsService.getSettings();
+    if (settingsRes.success && settingsRes.data) {
+      setSettings((settingsRes.data as any).data);
+    }
+  };
+
+  const handleLogout = async () => {
+    if (liveVoiceManagerRef.current) {
+      liveVoiceManagerRef.current.stopDuplexSession();
+      liveVoiceManagerRef.current = null;
+    }
+    await authService.logout();
+    setUser(null);
+    setActiveSession({
+      sessionId: null,
+      title: 'AURA Conversation',
+      currentTopic: 'General',
+      messageCount: 0,
+      startedAt: new Date().toISOString(),
+    });
+    setMessages([]);
+    setSessionGreeting(getGreetingText());
+    soundFx.playStatusChange('idle');
+  };
 
   const handleUpdateSettings = async (newSet: Partial<AppSettings>) => {
     const updated = { ...settings, ...newSet };
@@ -158,11 +250,6 @@ export default function App() {
     setSettings(DEFAULT_SETTINGS);
     await settingsService.updateSettings(DEFAULT_SETTINGS);
   };
-
-  // Sync Web Audio Synth enabled state with settings
-  useEffect(() => {
-    soundFx.setEnabled(settings.soundFxEnabled);
-  }, [settings.soundFxEnabled]);
 
   // Handle Resuming an Active Session from History Workspace
   const handleResumeSession = async (sessionId?: string) => {
@@ -277,8 +364,13 @@ export default function App() {
       try {
         if (!liveVoiceManagerRef.current) {
           const { LiveVoiceSyncManager } = await import('./services/live-voice-sync.manager.js');
+          const token = authService.getToken();
+          const wsUrl = token
+            ? `ws://${window.location.hostname}:5000/ws/voice?token=${encodeURIComponent(token)}`
+            : `ws://${window.location.hostname}:5000/ws/voice`;
+
           liveVoiceManagerRef.current = new LiveVoiceSyncManager({
-            wsUrl: `ws://${window.location.hostname}:5000/ws/voice`,
+            wsUrl,
             onStateChanged: (newStatus, newEmotion) => {
               setStatus(newStatus);
               if (newEmotion) setEmotion(newEmotion);
@@ -286,9 +378,23 @@ export default function App() {
             },
             onTranscriptionReceived: (text, isFinal) => {
               setAudioState((a) => ({ ...a, transcription: text }));
+              if (isFinal) {
+                setMessages((prev) => [...prev, {
+                  id: `voice-user-${Date.now()}`,
+                  sender: 'user',
+                  text,
+                  timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                }]);
+              }
             },
-            onAiResponseText: (aiText) => {
-              // Append to messages & update active session history
+            onAiResponseText: (aiText, conversationSessionId) => {
+              if (conversationSessionId) {
+                setActiveSession((prev) => ({
+                  ...prev,
+                  sessionId: conversationSessionId,
+                  messageCount: prev.messageCount + 2
+                }));
+              }
               const now = new Date();
               const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
               setMessages((prev) => [
@@ -338,7 +444,6 @@ export default function App() {
     if (nextOpen) {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-        // Stream acquired successfully — stop initial test track
         stream.getTracks().forEach((t) => t.stop());
         setStatus('vision');
         soundFx.playStatusChange('vision');
@@ -393,7 +498,7 @@ export default function App() {
         <div className="absolute top-[35%] right-[20%] w-2 h-2 bg-rose-200/40 rounded-full animate-pulse" />
       </div>
 
-      {/* 1. Background 3D AI Companion Avatar & Interactive Circular Ring (Always rendered softly in background) */}
+      {/* 1. Background 3D AI Companion Avatar & Interactive Circular Ring */}
       <div className={`absolute inset-0 z-0 transition-opacity duration-500 ${activeTab !== 'home' ? 'opacity-30 blur-xs pointer-events-none' : 'opacity-100'}`}>
         <AvatarViewer
           status={status}
@@ -404,13 +509,14 @@ export default function App() {
         />
       </div>
 
-      {/* 2. Unified Navigation Bar (Home, Chat, History, Profile, Settings) */}
+      {/* 2. Unified Navigation Bar (Home, Chat, History, Profile, Settings, Auth) */}
       <TopStatusBar
         activeTab={activeTab}
         isIdle={isIdle}
-        onNavigate={(tab) => {
-          setActiveTab(tab);
-        }}
+        user={user}
+        onNavigate={(tab) => setActiveTab(tab)}
+        onOpenAuth={handleOpenAuth}
+        onLogout={handleLogout}
       />
 
       {/* 3. Page Views Container */}
@@ -444,6 +550,9 @@ export default function App() {
         {activeTab === 'profile' && (
           <ProfilePage
             onNavigate={(page) => setActiveTab(page as NavTab)}
+            user={user}
+            onOpenAuth={handleOpenAuth}
+            onLogout={handleLogout}
           />
         )}
 
@@ -496,6 +605,14 @@ export default function App() {
           }}
         />
       )}
+
+      {/* Authentication Modal (Sign In / Register / Reset Password) */}
+      <AuthModal
+        isOpen={isAuthModalOpen}
+        onClose={() => setIsAuthModalOpen(false)}
+        onSuccess={handleAuthSuccess}
+        initialMode={authModalMode}
+      />
     </div>
   );
 }

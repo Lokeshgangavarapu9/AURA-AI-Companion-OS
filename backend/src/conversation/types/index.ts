@@ -31,6 +31,7 @@ export interface ChatMessageEntity {
 /** Domain entity representing a Conversation Session */
 export interface SessionMetadata {
   id: string;
+  userId?: string;
   title: string | null;
   currentTopic: string | null;
   messageCount: number;
@@ -44,6 +45,7 @@ export interface SessionMetadata {
 export interface CreateSessionDto {
   title?: string;
   initialTopic?: string;
+  userId?: string;
 }
 
 /** Data Transfer Object for appending a message to a session */

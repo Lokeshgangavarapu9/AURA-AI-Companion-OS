@@ -17,6 +17,8 @@ export class MicrophoneService {
   private isRecording = false;
   private currentSessionId?: string;
   private onMessageCallback?: (data: any) => void;
+  private recognition?: any;
+  private usingBrowserRecognition = false;
 
   constructor(config: Partial<MicrophoneServiceConfig> = {}) {
     this.config = {
@@ -48,6 +50,9 @@ export class MicrophoneService {
         this.ws.onmessage = (event) => {
           try {
             const data = JSON.parse(event.data);
+            if (data.type === 'SESSION_STARTED' && data.sessionId) {
+              this.currentSessionId = data.sessionId;
+            }
             if (this.onMessageCallback) {
               this.onMessageCallback(data);
             }
@@ -81,6 +86,36 @@ export class MicrophoneService {
         sampleRate: this.config.sampleRate,
       })
     );
+
+    // Prefer the browser recognizer when present. It provides real transcripts
+    // without pretending WebM/Opus is PCM for a server-side STT provider.
+    const Recognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (Recognition) {
+      this.usingBrowserRecognition = true;
+      this.isRecording = true;
+      this.recognition = new Recognition();
+      this.recognition.lang = 'en-US';
+      this.recognition.continuous = true;
+      this.recognition.interimResults = true;
+      this.recognition.onresult = (event: any) => {
+        for (let i = event.resultIndex; i < event.results.length; i += 1) {
+          const result = event.results[i];
+          const text = result[0]?.transcript?.trim();
+          if (text && result.isFinal && this.ws?.readyState === WebSocket.OPEN) {
+            this.ws.send(JSON.stringify({ type: 'TRANSCRIPTION', sessionId: this.currentSessionId, text, isFinal: true }));
+          }
+        }
+      };
+      this.recognition.onerror = (event: any) => console.warn('Speech recognition error', event.error);
+      this.recognition.onend = () => {
+        if (this.isRecording && this.usingBrowserRecognition) {
+          try { this.recognition.start(); } catch { /* recognition is already restarting */ }
+        }
+      };
+      this.recognition.start();
+      console.log('MicrophoneService: started continuous browser speech recognition');
+      return;
+    }
 
     // Capture User Microphone
     this.mediaStream = await navigator.mediaDevices.getUserMedia({
@@ -167,6 +202,14 @@ export class MicrophoneService {
   public stopRecording(): void {
     if (!this.isRecording) return;
 
+    const wasUsingBrowserRecognition = this.usingBrowserRecognition;
+
+    if (this.recognition) {
+      this.usingBrowserRecognition = false;
+      try { this.recognition.stop(); } catch { /* already stopped */ }
+      this.recognition = undefined;
+    }
+
     if (this.mediaRecorder && this.mediaRecorder.state !== 'inactive') {
       this.mediaRecorder.stop();
     }
@@ -175,7 +218,7 @@ export class MicrophoneService {
       this.mediaStream.getTracks().forEach((track) => track.stop());
     }
 
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+    if (!wasUsingBrowserRecognition && this.ws && this.ws.readyState === WebSocket.OPEN) {
       this.ws.send(
         JSON.stringify({
           type: 'END_SPEECH',

@@ -1,4 +1,5 @@
 // Prisma Schema Configuration for AURA AI Companion OS
+// Multi-tenant, Cloud-Ready, Postgres & SQLite Compatible
 
 generator client {
   provider = "prisma-client-js"
@@ -9,30 +10,76 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// User Model (Baseline)
+// User Model (Central Identity & Authentication Entity)
 model User {
-  id        String   @id @default(uuid())
-  email     String   @unique
-  name      String
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id                 String                 @id @default(uuid())
+  email              String                 @unique
+  name               String
+  passwordHash       String?
+  provider           String                 @default("local") // 'local' | 'google' | 'github' | 'apple'
+  providerId         String?                // External OAuth provider ID
+  isVerified         Boolean                @default(true)    // Ready for email verification workflows
+  verificationToken  String?
+  resetToken         String?
+  resetTokenExpiry   DateTime?
+  lastLoginAt        DateTime?
+  createdAt          DateTime               @default(now())
+  updatedAt          DateTime               @updatedAt
+
+  profile            UserProfile?
+  settings           Settings?
+  relationshipState  UserRelationshipState?
+  sessions           ConversationSession[]
+  memoryFacts        MemoryFact[]
+  reflections        Reflection[]
+  voiceSessions      VoiceSessionRecord[]
+
+  @@index([email])
 }
 
-// User Profile Model (Single Source of Truth for Identity Details)
+// User Profile Model (User-scoped single source of truth for identity details)
 model UserProfile {
   id         String   @id @default(uuid())
+  userId     String   @unique
   name       String?
   age        Int?
   occupation String?
   college    String?
   bio        String?
+  avatarUrl  String?
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
+
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
-// Memory Fact Model (Structured Fact, Preference, Goal & Knowledge Storage)
+// User Relationship State Model (Persistent state for Relationship Engine)
+model UserRelationshipState {
+  id                 String   @id @default(uuid())
+  userId             String   @unique
+  level              String   @default("stranger")
+  trustScore         Float    @default(10)
+  affinityScore      Float    @default(10)
+  relationshipHealth Float    @default(15)
+  interactionDepth   Float    @default(20)
+  totalTurnsCount    Int      @default(0)
+  signalsJson        String   @default("{}")
+  profileJson        String   @default("{}")
+  boundariesJson     String   @default("{}")
+  milestonesJson     String   @default("[]")
+  eventsJson         String   @default("[]")
+  historyJson        String   @default("[]")
+  lastInteractionAt  DateTime @default(now())
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  user               User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// Memory Fact Model (Structured Fact, Preference, Goal & Knowledge Storage per User)
 model MemoryFact {
   id          String   @id @default(uuid())
+  userId      String
   category    String   // 'fact' | 'preference' | 'goal' | 'relationship' | 'knowledge'
   key         String
   value       String
@@ -42,19 +89,30 @@ model MemoryFact {
   lastUsedAt  DateTime @default(now())
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, category])
+  @@index([userId, lastUsedAt])
 }
 
-// Reflection Model (Meta-Summaries & Long-term Insights)
+// Reflection Model (Meta-Summaries & Long-term Insights per User)
 model Reflection {
   id        String   @id @default(uuid())
+  userId    String
   summary   String
   sentiment String?
   createdAt DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }
 
-// Conversation Session Model (Session Metadata & History Threading ONLY)
+// Conversation Session Model (Session Metadata & History Threading per User)
 model ConversationSession {
   id                String              @id @default(uuid())
+  userId            String
   title             String?             @default("New Conversation")
   currentTopic      String?             @default("General")
   messageCount      Int                 @default(0)
@@ -62,10 +120,14 @@ model ConversationSession {
   lastInteractionAt DateTime            @default(now())
   createdAt         DateTime            @default(now())
   updatedAt         DateTime            @updatedAt
+
+  user              User                @relation(fields: [userId], references: [id], onDelete: Cascade)
   messages          ChatMessageRecord[]
+
+  @@index([userId, lastInteractionAt])
 }
 
-// Chat Message Record Model (Individual Message Log per Session ONLY)
+// Chat Message Record Model (Individual Message Log per Session)
 model ChatMessageRecord {
   id        String              @id @default(uuid())
   sessionId String
@@ -74,50 +136,83 @@ model ChatMessageRecord {
   emotion   String?             @default("neutral")
   topic     String?             @default("General")
   createdAt DateTime            @default(now())
+
   session   ConversationSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId, createdAt])
 }
 
-// App Settings Model (Single Source of Truth for Device & Engine Preferences)
+// App Settings Model (User-scoped Device, Companion & Engine Preferences)
 model Settings {
-  id                      String   @id @default("default")
+  id                   String   @id @default(uuid())
+  userId               String   @unique
+
   // Appearance
-  theme                   String   @default("obsidian")
-  accentColor             String   @default("#3b82f6")
-  avatarEyeColor          String   @default("#4338ca")
-  avatarGlowColor         String   @default("#3b82f6")
-  fontSize                String   @default("medium")
-  animationsEnabled       Boolean  @default(true)
-  soundFxEnabled          Boolean  @default(true)
+  theme                String   @default("obsidian")
+  accentColor          String   @default("#3b82f6")
+  avatarEyeColor       String   @default("#4338ca")
+  avatarGlowColor      String   @default("#3b82f6")
+  fontSize             String   @default("medium")
+  animationsEnabled    Boolean  @default(true)
+  soundFxEnabled       Boolean  @default(true)
+
   // Memory
-  memoryEnabled           Boolean  @default(true)
-  autoSave                Boolean  @default(true)
-  longTermMemory          Boolean  @default(true)
-  sensitiveMemory         Boolean  @default(false)
-  reviewBeforeSave        Boolean  @default(false)
+  memoryEnabled        Boolean  @default(true)
+  autoSave             Boolean  @default(true)
+  longTermMemory       Boolean  @default(true)
+  sensitiveMemory      Boolean  @default(false)
+  reviewBeforeSave     Boolean  @default(false)
+
   // AI Companion
-  responseLength          String   @default("medium")
-  personality             String   @default("aura-gentle")
-  creativity              Int      @default(70)
-  empathy                 Int      @default(90)
-  conversationStyle       String   @default("empathic")
+  responseLength       String   @default("medium")
+  personality          String   @default("aura-gentle")
+  creativity           Int      @default(70)
+  empathy              Int      @default(90)
+  conversationStyle    String   @default("empathic")
+
   // Voice
-  selectedMicrophone      String   @default("default")
-  selectedSpeaker         String   @default("default")
-  noiseSuppression        Boolean  @default(true)
-  echoCancellation        Boolean  @default(true)
+  selectedMicrophone   String   @default("default")
+  selectedSpeaker      String   @default("default")
+  noiseSuppression     Boolean  @default(true)
+  echoCancellation     Boolean  @default(true)
+
   // Vision
-  selectedCamera          String   @default("default")
-  eyeTracking             Boolean  @default(true)
-  gestureTracking         Boolean  @default(false)
-  visionEnabled           Boolean  @default(true)
-  cameraSensitivity       Int      @default(80)
+  selectedCamera       String   @default("default")
+  eyeTracking          Boolean  @default(true)
+  gestureTracking      Boolean  @default(false)
+  visionEnabled        Boolean  @default(true)
+  cameraSensitivity    Int      @default(80)
+
   // Notifications
-  desktopNotifications    Boolean  @default(true)
-  reminderSettings        String   @default("daily")
-  notificationSound       Boolean  @default(true)
+  desktopNotifications Boolean  @default(true)
+  reminderSettings     String   @default("daily")
+  notificationSound    Boolean  @default(true)
+
   // Privacy
-  cameraPermission        Boolean  @default(true)
-  microphonePermission     Boolean  @default(true)
+  cameraPermission     Boolean  @default(true)
+  microphonePermission Boolean  @default(true)
+
   // Connectors
-  connectorsEnabled       String   @default("[]") // JSON string list of enabled connectors
+  connectorsEnabled    String   @default("[]") // JSON string list of enabled connectors
+
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  user                 User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// Voice Session Record (WebSocket voice session tracking per User)
+model VoiceSessionRecord {
+  id                    String   @id @default(uuid())
+  sessionId             String   @unique
+  userId                String
+  conversationSessionId String?
+  status                String   @default("active")
+  turnsCount            Int      @default(0)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  user                  User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
 }

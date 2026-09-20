@@ -15,27 +15,29 @@ export interface ISessionRepository {
   /**
    * Persists a new ConversationSession record.
    */
-  createSession(dto?: CreateSessionDto): Promise<SessionMetadata>;
+  createSession(dto?: CreateSessionDto, userId?: string): Promise<SessionMetadata>;
 
   /**
    * Retrieves all ConversationSession records sorted by pinned status & last interaction.
+   * Scoped to userId if provided.
    */
-  listSessions(): Promise<SessionMetadata[]>;
+  listSessions(userId?: string): Promise<SessionMetadata[]>;
 
   /**
    * Retrieves a ConversationSession by ID.
+   * Optionally checks userId ownership.
    */
-  getSessionById(sessionId: string): Promise<SessionMetadata | null>;
+  getSessionById(sessionId: string, userId?: string): Promise<SessionMetadata | null>;
 
   /**
    * Updates metadata on an existing ConversationSession.
    */
-  updateSession(sessionId: string, data: Partial<SessionMetadata>): Promise<SessionMetadata>;
+  updateSession(sessionId: string, data: Partial<SessionMetadata>, userId?: string): Promise<SessionMetadata>;
 
   /**
    * Deletes a ConversationSession and all associated messages.
    */
-  deleteSession(sessionId: string): Promise<boolean>;
+  deleteSession(sessionId: string, userId?: string): Promise<boolean>;
 
   /**
    * Appends a new ChatMessageRecord to a session thread.

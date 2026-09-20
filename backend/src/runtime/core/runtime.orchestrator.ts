@@ -63,6 +63,7 @@ export class RuntimeLifecycleOrchestrator {
 
       const output: RuntimeOrchestratorOutput = {
         sessionId: activeSessionId,
+        userId: input.userId,
         responseText: parsed.text,
         emotion: parsed.emotion,
         providerUsed: providerRes.providerId,
@@ -119,6 +120,7 @@ export class RuntimeLifecycleOrchestrator {
     }
     return {
       sessionId,
+      userId: input.userId,
       responseText,
       emotion: 'soothing',
       providerUsed: 'fallback',

@@ -1,19 +1,41 @@
 import { Router, Request, Response } from 'express';
 import { prisma } from '../../database/client.js';
-import { conversationManager } from '../../conversation/manager/conversation.manager.js';
 import { sqliteMemoryRepository } from '../../memory/storage/sqlite.repository.js';
+import { relationshipRepository } from '../../relationship/storage/relationship.repository.js';
+import { optionalAuthenticateUser } from '../../middleware/auth.middleware.js';
 import { HTTP_STATUS } from '../../config/index.js';
 
 const router = Router();
 
+router.use(optionalAuthenticateUser);
+
+async function getEffectiveUserId(req: Request): Promise<string> {
+  const userId = (req as any).user?.userId;
+  if (userId) return userId;
+
+  const existing = await prisma.user.findFirst();
+  if (existing) return existing.id;
+
+  const created = await prisma.user.create({
+    data: {
+      email: 'user@aura.os',
+      name: 'Alex',
+      provider: 'local',
+    },
+  });
+  return created.id;
+}
+
 // GET /api/v1/profile
 router.get('/profile', async (req: Request, res: Response) => {
   try {
-    const profile = await sqliteMemoryRepository.getUserProfile();
-    const user = await prisma.user.findFirst();
+    const userId = await getEffectiveUserId(req);
+    const profile = await sqliteMemoryRepository.getUserProfile(userId);
+    const user = await prisma.user.findUnique({ where: { id: userId } });
 
-    // Calculate total conversation count and message count
+    // Calculate user-scoped conversation count and message count
     const sessions = await prisma.conversationSession.findMany({
+      where: { userId },
       include: { _count: { select: { messages: true } } },
     });
 
@@ -22,41 +44,26 @@ router.get('/profile', async (req: Request, res: Response) => {
 
     // Calculate Days Together
     let daysTogether = 1;
-    if (user) {
-      const msDiff = Date.now() - new Date(user.createdAt).getTime();
-      daysTogether = Math.max(1, Math.ceil(msDiff / (1000 * 60 * 60 * 24)));
-    } else if (profile) {
-      const msDiff = Date.now() - new Date(profile.createdAt).getTime();
+    const createdTimestamp = user?.createdAt || profile?.createdAt;
+    if (createdTimestamp) {
+      const msDiff = Date.now() - new Date(createdTimestamp).getTime();
       daysTogether = Math.max(1, Math.ceil(msDiff / (1000 * 60 * 60 * 24)));
     }
 
-    // Get active relationship state from ConversationManager map
-    let relationshipLevel = 'stranger';
-    let trustScore = 15;
-    let relationshipHealth = 20;
-    let milestonesCount = 0;
-    let signalCuriosity = 5;
+    // Get persistent relationship state from RelationshipRepository
+    const relState = await relationshipRepository.getRelationshipState(userId);
+    const relationshipLevel = relState.level;
+    const trustScore = relState.metrics.trustScore;
+    const relationshipHealth = relState.metrics.relationshipHealth;
+    const milestonesCount = relState.milestones?.length || 0;
+    const signalCuriosity = relState.signals?.curiosity || 5;
 
-    // Check if there are active states in conversationManager
-    // conversationManager.sessionRelationshipStates is private, but we can access it using bracket notation
-    const sessionRelationshipStates = (conversationManager as any).sessionRelationshipStates;
-    if (sessionRelationshipStates && sessionRelationshipStates.size > 0) {
-      // Get the most recent active session's state
-      const states = Array.from(sessionRelationshipStates.values()) as any[];
-      if (states.length > 0) {
-        const latestState = states[states.length - 1];
-        relationshipLevel = latestState.level;
-        trustScore = latestState.metrics.trustScore;
-        relationshipHealth = latestState.metrics.relationshipHealth;
-        milestonesCount = latestState.milestones?.length || 0;
-        signalCuriosity = latestState.signals?.curiosity || 5;
-      }
-    }
-
-    // Gather favorite topics from message logs
+    // Gather favorite topics from user's message logs
     const messages = await prisma.chatMessageRecord.findMany({
+      where: { session: { userId } },
       select: { topic: true },
     });
+
     const topicCounts: Record<string, number> = {};
     messages.forEach((m) => {
       if (m.topic) {
@@ -74,8 +81,9 @@ router.get('/profile', async (req: Request, res: Response) => {
       status: 'ok',
       data: {
         id: profile?.id || 'default-profile',
-        name: profile?.name || 'Alex',
+        name: profile?.name || user?.name || 'Alex',
         email: user?.email || 'alex@aura.os',
+        avatarUrl: profile?.avatarUrl || null,
         relationshipLevel,
         daysTogether,
         statistics: {
@@ -96,7 +104,7 @@ router.get('/profile', async (req: Request, res: Response) => {
           signalCuriosity > 7 ? { name: 'Curious', category: 'emotion' } : null,
         ].filter(Boolean),
         personalization: {
-          nickname: profile?.name || 'Alex',
+          nickname: profile?.name || user?.name || 'Alex',
           companionName: 'Shizuka',
           language: 'English (US)',
           theme: 'Blush Rose & Warm White',
@@ -117,29 +125,30 @@ router.get('/profile', async (req: Request, res: Response) => {
 // POST /api/v1/profile
 router.post('/profile', async (req: Request, res: Response) => {
   try {
-    const { name, email, age, occupation, college, bio } = req.body;
-    
-    // Update or create Profile details in DB
-    const profile = await sqliteMemoryRepository.updateUserProfile({
-      name,
-      age: age ? parseInt(age, 10) : undefined,
-      occupation,
-      college,
-      bio,
-    });
+    const userId = await getEffectiveUserId(req);
+    const { name, email, age, occupation, college, bio, avatarUrl } = req.body;
 
-    if (email) {
-      const user = await prisma.user.findFirst();
-      if (user) {
-        await prisma.user.update({
-          where: { id: user.id },
-          data: { email, name: name || user.name },
-        });
-      } else {
-        await prisma.user.create({
-          data: { email, name: name || 'Alex' },
-        });
-      }
+    // Update or create Profile details in DB
+    const profile = await sqliteMemoryRepository.updateUserProfile(
+      {
+        name,
+        age: age ? parseInt(age, 10) : undefined,
+        occupation,
+        college,
+        bio,
+        avatarUrl,
+      },
+      userId
+    );
+
+    if (email || name) {
+      await prisma.user.update({
+        where: { id: userId },
+        data: {
+          ...(email && { email }),
+          ...(name && { name }),
+        },
+      });
     }
 
     res.status(HTTP_STATUS.OK).json({

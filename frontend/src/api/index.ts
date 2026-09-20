@@ -17,3 +17,4 @@ export * from './services/voiceService.js';
 export * from './services/visionService.js';
 export * from './services/profileService.js';
 export * from './services/settingsService.js';
+export * from './services/authService.js';

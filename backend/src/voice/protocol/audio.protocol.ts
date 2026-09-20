@@ -6,6 +6,7 @@
 export enum AudioFrameType {
   START_SESSION = 'START_SESSION',
   AUDIO_CHUNK = 'AUDIO_CHUNK',
+  TRANSCRIPTION = 'TRANSCRIPTION',
   END_SPEECH = 'END_SPEECH',
   INTERRUPT = 'INTERRUPT',
   PAUSE_SESSION = 'PAUSE_SESSION',
@@ -43,6 +44,13 @@ export interface AudioChunkMessage extends BaseAudioMessage {
   sequenceNumber?: number;
 }
 
+/** A final transcript produced by a browser-native recognizer. */
+export interface TranscriptionMessage extends BaseAudioMessage {
+  type: AudioFrameType.TRANSCRIPTION;
+  text: string;
+  isFinal?: boolean;
+}
+
 export interface InterruptMessage extends BaseAudioMessage {
   type: AudioFrameType.INTERRUPT;
   reason?: string;
@@ -67,5 +75,6 @@ export interface ServerErrorMessage extends BaseAudioMessage {
 export type ClientAudioMessage =
   | StartSessionMessage
   | AudioChunkMessage
+  | TranscriptionMessage
   | InterruptMessage
   | BaseAudioMessage;

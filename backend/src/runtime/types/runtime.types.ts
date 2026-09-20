@@ -1,6 +1,7 @@
 /**
  * AURA Core Runtime Layer — Domain Types & Interfaces
  * Pure domain contracts for runtime states, context budgeting, and orchestration.
+ * Multi-tenant ready with userId scoping.
  */
 
 import { EmotionalContext } from '../../emotion/types/index.js';
@@ -36,6 +37,7 @@ export interface RuntimeContext {
   readonly id: string;
   readonly createdAt: Date;
   readonly sessionId: string;
+  readonly userId?: string;
   readonly userMessage: string;
 
   // Domain Snapshots
@@ -67,6 +69,7 @@ export interface RuntimeContext {
 export interface RuntimeOrchestratorInput {
   userMessage: string;
   sessionId?: string;
+  userId?: string;
   emotionalContext?: EmotionalContext;
   relationshipContext?: RelationshipContext;
   cognitivePlan?: CognitivePlan;
@@ -74,6 +77,7 @@ export interface RuntimeOrchestratorInput {
 
 export interface RuntimeOrchestratorOutput {
   sessionId: string;
+  userId?: string;
   responseText: string;
   emotion: string;
   providerUsed: string;

@@ -1,14 +1,17 @@
 import { Router, Request, Response } from 'express';
 import { handleChatMessage } from '../controllers/chat.controller.js';
+import { optionalAuthenticateUser } from '../../middleware/auth.middleware.js';
 import { HTTP_STATUS } from '../../config/index.js';
 import fs from 'fs/promises';
 import path from 'path';
 
 const router = Router();
 
+router.use(optionalAuthenticateUser);
+
 /**
  * POST /api/v1/chat
- * Primary chat endpoint for communicating with Gemini AI Engine.
+ * Primary chat endpoint for communicating with AI Engine.
  */
 router.post('/chat', handleChatMessage);
 

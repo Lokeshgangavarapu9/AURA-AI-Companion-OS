@@ -9,6 +9,7 @@ export type MemoryCategory = 'fact' | 'preference' | 'goal' | 'relationship' | '
 /** Domain entity representing a stored memory fact */
 export interface MemoryFactEntity {
   id: string;
+  userId?: string;
   category: MemoryCategory;
   key: string;
   value: string;
@@ -22,6 +23,7 @@ export interface MemoryFactEntity {
 
 /** Data Transfer Object for creating a new MemoryFact */
 export interface CreateMemoryFactDto {
+  userId?: string;
   category: MemoryCategory;
   key: string;
   value: string;
@@ -43,11 +45,13 @@ export interface UpdateMemoryFactDto {
 /** Domain entity representing the User Profile identity */
 export interface UserProfileEntity {
   id: string;
+  userId?: string;
   name: string | null;
   age: number | null;
   occupation: string | null;
   college: string | null;
   bio: string | null;
+  avatarUrl?: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -59,11 +63,13 @@ export interface UpdateUserProfileDto {
   occupation?: string;
   college?: string;
   bio?: string;
+  avatarUrl?: string;
 }
 
 /** Domain entity representing a meta-reflection or emotional summary */
 export interface ReflectionEntity {
   id: string;
+  userId?: string;
   summary: string;
   sentiment: string | null;
   createdAt: Date;
@@ -71,6 +77,7 @@ export interface ReflectionEntity {
 
 /** Data Transfer Object for creating a Reflection */
 export interface CreateReflectionDto {
+  userId?: string;
   summary: string;
   sentiment?: string;
 }

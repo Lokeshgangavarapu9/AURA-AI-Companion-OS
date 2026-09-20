@@ -5,10 +5,12 @@ import {
   History,
   Settings,
   User,
-  Home
+  Home,
+  LogIn,
+  LogOut
 } from 'lucide-react';
 import { soundFx } from '../utils/soundEffects';
-import { healthService, HealthResponse } from '../api/index.js';
+import { healthService, HealthResponse, UserClaims } from '../api/index.js';
 
 export type NavTab = 'home' | 'chat' | 'history' | 'profile' | 'settings';
 
@@ -16,6 +18,9 @@ interface TopStatusBarProps {
   activeTab: NavTab;
   onNavigate: (tab: NavTab) => void;
   isIdle?: boolean;
+  user?: UserClaims | null;
+  onOpenAuth?: (mode?: 'login' | 'register') => void;
+  onLogout?: () => void;
 }
 
 type BackendConnectionStatus = 'connecting' | 'online' | 'offline';
@@ -23,7 +28,10 @@ type BackendConnectionStatus = 'connecting' | 'online' | 'offline';
 export const TopStatusBar: React.FC<TopStatusBarProps> = ({
   activeTab,
   onNavigate,
-  isIdle = false
+  isIdle = false,
+  user = null,
+  onOpenAuth,
+  onLogout,
 }) => {
   const [connectionStatus, setConnectionStatus] = useState<BackendConnectionStatus>('connecting');
   const [, setHealthData] = useState<HealthResponse | null>(null);
@@ -181,6 +189,50 @@ export const TopStatusBar: React.FC<TopStatusBarProps> = ({
             <Settings className="w-3.5 h-3.5 text-slate-500" />
             <span className="hidden sm:inline">Settings</span>
           </button>
+
+          {/* Authentication State / Action */}
+          {user ? (
+            <div className="flex items-center gap-1 ml-1 pl-2 border-l border-slate-200/80">
+              <button
+                type="button"
+                title={`Signed in as ${user.name} (${user.email})`}
+                onClick={() => {
+                  soundFx.playClick();
+                  onNavigate('profile');
+                }}
+                className="flex items-center gap-1.5 px-2 py-1 rounded-full bg-pink-50 hover:bg-pink-100 text-pink-700 transition-all cursor-pointer text-xs font-semibold"
+              >
+                <div className="w-5 h-5 rounded-full bg-gradient-to-tr from-pink-400 to-rose-400 text-white flex items-center justify-center text-[10px] font-bold shadow-xs">
+                  {user.name.charAt(0).toUpperCase()}
+                </div>
+                <span className="max-w-[70px] truncate hidden md:inline">{user.name}</span>
+              </button>
+
+              <button
+                type="button"
+                title="Sign Out"
+                onClick={() => {
+                  soundFx.playClick();
+                  onLogout?.();
+                }}
+                className="p-1.5 rounded-full text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-all cursor-pointer"
+              >
+                <LogOut className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => {
+                soundFx.playClick();
+                onOpenAuth?.('login');
+              }}
+              className="flex items-center gap-1 px-3 py-1.5 ml-1 rounded-full text-xs font-semibold text-white bg-gradient-to-r from-pink-500 to-rose-500 hover:from-pink-600 hover:to-rose-600 shadow-xs hover:shadow-sm transition-all cursor-pointer"
+            >
+              <LogIn className="w-3.5 h-3.5" />
+              <span>Sign In</span>
+            </button>
+          )}
         </nav>
       </div>
     </header>
