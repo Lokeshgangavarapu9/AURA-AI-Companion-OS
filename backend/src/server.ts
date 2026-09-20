@@ -14,7 +14,7 @@ async function startServer() {
     await connectDatabase();
 
     // 2. Start Express HTTP Server
-    const server = app.listen(env.PORT, () => {
+    const server = app.listen(env.PORT, '0.0.0.0', () => {
       logger.info(`=======================================================`);
       logger.info(`🚀 ${APP_CONSTANTS.APP_NAME} active`);
       logger.info(`📌 Environment : ${env.NODE_ENV}`);
