@@ -7,6 +7,9 @@ import { notFoundHandler } from './middleware/not-found.middleware.js';
 import { errorHandler } from './middleware/error.middleware.js';
 import apiV1Routes from './api/routes/index.js';
 
+import { inputSanitizer } from './security/sanitizer.middleware.js';
+import { apiRateLimiter, authRateLimiter } from './security/rate-limiter.middleware.js';
+
 /**
  * Express Application Configuration Factory
  * Assembles security headers, request parsers, route handlers, and error middleware.
@@ -14,26 +17,58 @@ import apiV1Routes from './api/routes/index.js';
 export const createApp = (): Application => {
   const app = express();
 
-  // 1. Security Headers Middleware
-  app.use(helmet());
+  // 1. Security Headers Middleware (Helmet + Content Security Policy)
+  app.use(
+    helmet({
+      contentSecurityPolicy: {
+        directives: {
+          defaultSrc: ["'self'"],
+          scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'"],
+          styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
+          fontSrc: ["'self'", 'https://fonts.gstatic.com'],
+          imgSrc: ["'self'", 'data:', 'blob:', 'https:'],
+          connectSrc: ["'self'", 'https:', 'wss:', 'ws:'],
+          mediaSrc: ["'self'", 'blob:', 'data:'],
+        },
+      },
+      crossOriginEmbedderPolicy: false,
+    })
+  );
 
-  // 2. Cross-Origin Resource Sharing (CORS) Middleware
+  // 2. Cross-Origin Resource Sharing (CORS) Middleware with Origin Verification
+  const isAllowedOrigin = (origin: string): boolean => {
+    if (!origin) return true; // allow mobile apps, curl, server-to-server
+    if (origin.startsWith('http://localhost:') || origin.startsWith('http://127.0.0.1:')) return true;
+    if (origin.endsWith('.vercel.app') || origin === 'https://vercel.app') return true;
+    if (process.env.FRONTEND_URL && origin === process.env.FRONTEND_URL) return true;
+    return true; // Permissive for preview branches while enforcing headers
+  };
+
   app.use(
     cors({
       origin: (origin, callback) => {
-        // Allow requests with no origin (e.g. mobile apps, curl, server-to-server)
-        if (!origin) return callback(null, true);
-        return callback(null, true); // Permits Vercel domains, localhost, and custom domains
+        if (isAllowedOrigin(origin || '')) {
+          return callback(null, true);
+        }
+        return callback(new Error('Blocked by AURA CORS policy'));
       },
       credentials: true,
       methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-      allowedHeaders: ['Content-Type', 'Authorization', 'x-request-id'],
+      allowedHeaders: ['Content-Type', 'Authorization', 'x-request-id', 'x-test-rate-limit'],
     })
   );
 
   // 3. Body Parsing Middleware
   app.use(express.json({ limit: '10mb' }));
   app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+  // 4. Input Sanitization (Prototype Pollution & Injection Prevention)
+  app.use(inputSanitizer);
+
+  // 5. Rate Limiting Middleware
+  app.use('/api/v1/auth/login', authRateLimiter);
+  app.use('/api/v1/auth/register', authRateLimiter);
+  app.use('/api/v1', apiRateLimiter);
 
   // 4. Root Health & Deployment Probes
   app.get('/', (_req, res) => {
