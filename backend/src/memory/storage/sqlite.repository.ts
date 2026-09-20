@@ -107,6 +107,31 @@ export class SqliteMemoryRepository implements IMemoryRepository {
   }
 
   /**
+   * Reinforces a MemoryFact by incrementing frequency and bumping lastUsedAt.
+   */
+  public async reinforceMemoryFact(id: string, userId?: string): Promise<MemoryFactEntity | null> {
+    try {
+      const whereClause: any = { id };
+      if (userId) whereClause.userId = userId;
+
+      const existing = await prisma.memoryFact.findFirst({ where: whereClause });
+      if (!existing) return null;
+
+      const updated = await prisma.memoryFact.update({
+        where: { id },
+        data: {
+          frequency: existing.frequency + 1,
+          lastUsedAt: new Date(),
+        },
+      });
+
+      return this.mapMemoryFact(updated);
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * Retrieves a MemoryFact by ID.
    */
   public async getMemoryFactById(id: string, userId?: string): Promise<MemoryFactEntity | null> {

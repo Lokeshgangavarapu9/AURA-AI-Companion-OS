@@ -186,20 +186,55 @@ export class MemoryScorer {
   }
 
   /**
-   * Computes keyword match density between query keywords and memory key/value
+   * Computes hybrid keyword + semantic context score between query keywords and memory key/value
    */
   private static calculateContextScore(fact: MemoryFactEntity, queryKeywords: string[]): number {
     if (!queryKeywords || queryKeywords.length === 0) return 0.5; // neutral baseline when no query provided
 
     const textToMatch = `${fact.key} ${fact.value} ${fact.category}`.toLowerCase();
-    let matches = 0;
+    let keywordMatches = 0;
 
+    // 1. Direct Keyword Matching
     for (const kw of queryKeywords) {
       if (textToMatch.includes(kw.toLowerCase())) {
-        matches++;
+        keywordMatches++;
       }
     }
+    const keywordScore = Math.min(1.0, keywordMatches / Math.max(1, queryKeywords.length));
 
-    return Math.min(1.0, matches / Math.max(1, queryKeywords.length));
+    // 2. Semantic Conceptual Relevance
+    let semanticBoost = 0.0;
+    const queryJoined = queryKeywords.join(' ').toLowerCase();
+
+    // Preference intent detection
+    if (fact.category === 'preference' && (queryJoined.includes('like') || queryJoined.includes('love') || queryJoined.includes('prefer') || queryJoined.includes('favorite') || queryJoined.includes('hate'))) {
+      semanticBoost += 0.35;
+    }
+
+    // Goal & aspiration intent detection
+    if (fact.category === 'goal' && (queryJoined.includes('plan') || queryJoined.includes('want') || queryJoined.includes('goal') || queryJoined.includes('achieve') || queryJoined.includes('future') || queryJoined.includes('hope'))) {
+      semanticBoost += 0.35;
+    }
+
+    // Relationship intent detection
+    if (fact.category === 'relationship' && (queryJoined.includes('who') || queryJoined.includes('friend') || queryJoined.includes('partner') || queryJoined.includes('family') || queryJoined.includes('boss') || queryJoined.includes('brother') || queryJoined.includes('sister'))) {
+      semanticBoost += 0.35;
+    }
+
+    // N-gram / character level fuzzy overlap for non-exact spelling
+    let charOverlap = 0;
+    for (const kw of queryKeywords) {
+      if (kw.length >= 4) {
+        const trigrams = [kw.slice(0, 3), kw.slice(1, 4), kw.slice(-3)];
+        if (trigrams.some((tri) => textToMatch.includes(tri))) {
+          charOverlap += 0.15;
+        }
+      }
+    }
+    const semanticScore = Math.min(1.0, semanticBoost + Math.min(0.4, charOverlap));
+
+    // 3. Hybrid Combination (50% lexical keyword + 50% semantic context)
+    const hybridScore = 0.55 * keywordScore + 0.45 * semanticScore;
+    return Math.min(1.0, Math.round(hybridScore * 100) / 100);
   }
 }

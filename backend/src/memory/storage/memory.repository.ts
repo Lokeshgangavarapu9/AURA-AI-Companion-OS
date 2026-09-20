@@ -32,6 +32,11 @@ export interface IMemoryRepository {
   deleteMemoryFact(id: string, userId?: string): Promise<boolean>;
 
   /**
+   * Reinforces a MemoryFact by incrementing usage frequency and bumping lastUsedAt
+   */
+  reinforceMemoryFact(id: string, userId?: string): Promise<MemoryFactEntity | null>;
+
+  /**
    * Retrieves a MemoryFact by ID.
    */
   getMemoryFactById(id: string, userId?: string): Promise<MemoryFactEntity | null>;

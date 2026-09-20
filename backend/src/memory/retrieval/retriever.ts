@@ -50,6 +50,11 @@ export class MemoryRetriever {
 
       const topFacts = scoredItems.map((item) => item.fact);
 
+      // Asynchronously reinforce frequently retrieved memories (Mission 6.7)
+      for (const fact of topFacts) {
+        this.repository.reinforceMemoryFact(fact.id, userId).catch(() => {});
+      }
+
       // 4. Categorize facts into WorkingMemory buckets
       const facts: MemoryFactEntity[] = [];
       const preferences: MemoryFactEntity[] = [];
