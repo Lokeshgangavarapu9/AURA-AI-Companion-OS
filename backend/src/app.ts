@@ -20,8 +20,14 @@ export const createApp = (): Application => {
   // 2. Cross-Origin Resource Sharing (CORS) Middleware
   app.use(
     cors({
-      origin: true, // Allow frontend dev server requests
+      origin: (origin, callback) => {
+        // Allow requests with no origin (e.g. mobile apps, curl, server-to-server)
+        if (!origin) return callback(null, true);
+        return callback(null, true); // Permits Vercel domains, localhost, and custom domains
+      },
       credentials: true,
+      methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+      allowedHeaders: ['Content-Type', 'Authorization', 'x-request-id'],
     })
   );
 
@@ -29,10 +35,25 @@ export const createApp = (): Application => {
   app.use(express.json({ limit: '10mb' }));
   app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-  // 4. Request Logging & Latency Tracking Middleware
+  // 4. Root Health & Deployment Probes
+  app.get('/', (_req, res) => {
+    res.json({
+      status: 'ok',
+      service: APP_CONSTANTS.APP_NAME,
+      version: '1.0.0',
+      timestamp: new Date().toISOString(),
+    });
+  });
+  app.get('/health', (req, res) => {
+    import('./api/controllers/health.controller.js').then(({ getHealthStatus }) => {
+      getHealthStatus(req, res);
+    });
+  });
+
+  // 5. Request Logging & Latency Tracking Middleware
   app.use(requestLogger);
 
-  // 5. API v1 Routing (/api/v1/health, etc.)
+  // 6. API v1 Routing (/api/v1/health, etc.)
   app.use(APP_CONSTANTS.API_PREFIX, apiV1Routes);
 
   // 6. Global 404 Handler (unmatched routes)
