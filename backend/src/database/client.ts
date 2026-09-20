@@ -24,7 +24,7 @@ if (env.NODE_ENV !== 'production') {
 export const connectDatabase = async (): Promise<void> => {
   try {
     await prisma.$connect();
-    logger.info('🗄️ Database connected successfully (SQLite)');
+    logger.info('🗄️ Database connected successfully (PostgreSQL / Neon)');
   } catch (error) {
     logger.error({ err: error }, '❌ Database connection failed');
     throw error;

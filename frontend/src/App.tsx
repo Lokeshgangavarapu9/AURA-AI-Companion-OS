@@ -29,6 +29,7 @@ import {
   API_CONFIG,
   UserClaims
 } from './api/index.js';
+import { useAuth } from './context/AuthContext.tsx';
 
 // Core Components
 import { AvatarViewer } from './components/AvatarViewer';
@@ -56,10 +57,16 @@ export default function App() {
   // Navigation Routing State
   const [activeTab, setActiveTab] = useState<NavTab>('home');
 
-  // Authentication State (Multi-tenant SaaS Identity)
-  const [user, setUser] = useState<UserClaims | null>(null);
-  const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
-  const [authModalMode, setAuthModalMode] = useState<'login' | 'register'>('login');
+  // Centralized Multi-Tenant Authentication & Session Context
+  const {
+    user,
+    setUser,
+    isAuthModalOpen,
+    authModalMode,
+    openAuthModal,
+    closeAuthModal,
+    logout: contextLogout,
+  } = useAuth();
 
   // Active Session State (Resets on browser refresh or restores via History)
   const [activeSession, setActiveSession] = useState<ConversationSessionState>({
@@ -110,48 +117,19 @@ export default function App() {
   // Time-of-day session greeting (Greets once per session)
   const [sessionGreeting, setSessionGreeting] = useState<string | null>(() => getGreetingText());
 
-  // Restore authenticated session on mount and sync across tabs
+  // Synchronize greeting & user-scoped settings when authenticated user session changes
   useEffect(() => {
-    const restoreAuth = async () => {
-      if (authService.isAuthenticated()) {
-        const res = await authService.getMe();
-        if (res.success && res.data?.data?.user) {
-          const authUser = res.data.data.user;
-          setUser(authUser);
-          setSessionGreeting(getGreetingText(authUser.name));
-
-          // Reload user-scoped settings
-          const settingsRes = await settingsService.getSettings();
-          if (settingsRes.success && settingsRes.data) {
-            setSettings((settingsRes.data as any).data);
-          }
-        } else {
-          authService.clearToken();
-          setUser(null);
+    if (user) {
+      setSessionGreeting(getGreetingText(user.name));
+      settingsService.getSettings().then((settingsRes) => {
+        if (settingsRes.success && settingsRes.data) {
+          setSettings((settingsRes.data as any).data);
         }
-      }
-    };
-
-    restoreAuth();
-
-    const handleUnauthorized = () => {
-      setUser(null);
-      setIsAuthModalOpen(true);
-      setAuthModalMode('login');
-    };
-
-    const handleAuthState = () => {
-      restoreAuth();
-    };
-
-    window.addEventListener('aura:unauthorized', handleUnauthorized);
-    window.addEventListener('aura:auth_state_changed', handleAuthState);
-
-    return () => {
-      window.removeEventListener('aura:unauthorized', handleUnauthorized);
-      window.removeEventListener('aura:auth_state_changed', handleAuthState);
-    };
-  }, []);
+      });
+    } else {
+      setSessionGreeting(getGreetingText());
+    }
+  }, [user]);
 
   // Auto-fade greeting banner after 6 seconds
   useEffect(() => {
@@ -201,8 +179,7 @@ export default function App() {
   }, [settings.soundFxEnabled]);
 
   const handleOpenAuth = (mode: 'login' | 'register' = 'login') => {
-    setAuthModalMode(mode);
-    setIsAuthModalOpen(true);
+    openAuthModal(mode);
   };
 
   const handleAuthSuccess = async (authenticatedUser: UserClaims) => {
@@ -227,8 +204,7 @@ export default function App() {
       liveVoiceManagerRef.current.stopDuplexSession();
       liveVoiceManagerRef.current = null;
     }
-    await authService.logout();
-    setUser(null);
+    await contextLogout();
     setActiveSession({
       sessionId: null,
       title: 'AURA Conversation',
@@ -237,8 +213,18 @@ export default function App() {
       startedAt: new Date().toISOString(),
     });
     setMessages([]);
+    setSettings(DEFAULT_SETTINGS);
     setSessionGreeting(getGreetingText());
     soundFx.playStatusChange('idle');
+  };
+
+  // Protected Route & Navigation Guard: Protect application until login succeeds
+  const handleNavigate = (tab: NavTab) => {
+    if ((tab === 'history' || tab === 'profile') && !user) {
+      openAuthModal('login');
+      return;
+    }
+    setActiveTab(tab);
   };
 
   const handleUpdateSettings = async (newSet: Partial<AppSettings>) => {
@@ -293,6 +279,11 @@ export default function App() {
 
   // Handle AI Response Generation via Live Backend ConversationManager
   const triggerAIResponse = async (userPrompt: string) => {
+    if (!user) {
+      openAuthModal('login');
+      return;
+    }
+
     setStatus('thinking');
     setEmotion('thinking');
     soundFx.playStatusChange('thinking');
@@ -353,6 +344,11 @@ export default function App() {
 
   // Toggle Microphone Realtime Voice (Clean Production Experience vs Developer Mode)
   const handleToggleMic = async () => {
+    if (!user) {
+      openAuthModal('login');
+      return;
+    }
+
     const nextMicActive = !audioState.isMicActive;
     setAudioState((prev) => ({ ...prev, isMicActive: nextMicActive }));
 
@@ -516,7 +512,7 @@ export default function App() {
         activeTab={activeTab}
         isIdle={isIdle}
         user={user}
-        onNavigate={(tab) => setActiveTab(tab)}
+        onNavigate={handleNavigate}
         onOpenAuth={handleOpenAuth}
         onLogout={handleLogout}
       />
@@ -611,7 +607,7 @@ export default function App() {
       {/* Authentication Modal (Sign In / Register / Reset Password) */}
       <AuthModal
         isOpen={isAuthModalOpen}
-        onClose={() => setIsAuthModalOpen(false)}
+        onClose={closeAuthModal}
         onSuccess={handleAuthSuccess}
         initialMode={authModalMode}
       />
